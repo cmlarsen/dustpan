@@ -82,8 +82,12 @@ fn clear_progress() {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let cfg = config::load()?;
     let cmd = cli.cmd.unwrap_or(Cmd::Tui);
+    if let Cmd::Config = cmd {
+        println!("{}", config::config_path().display());
+        return config::load().map(|_| ());
+    }
+    let cfg = config::load()?;
     if !matches!(cmd, Cmd::Tui) {
         util::kill_children_on_interrupt();
     }
@@ -145,16 +149,14 @@ fn main() -> Result<()> {
             println!("{answer}");
             Ok(())
         }
-        Cmd::Config => {
-            println!("{}", config::config_path().display());
-            Ok(())
-        }
+        Cmd::Config => Ok(()),
     }
 }
 
 fn clean_safe(cfg: config::Config, yes: bool, dry_run: bool) -> Result<()> {
     let home = util::home();
     let roots = config::resolve_roots(&cfg, &home);
+    let protector = config::Protector::new(&cfg.protect, state::State::load().pins, &home)?;
     let (items, _) = scan::collect(cfg, progress);
     clear_progress();
     let safe: Vec<&Item> = items
@@ -190,7 +192,7 @@ fn clean_safe(cfg: config::Config, yes: bool, dry_run: bool) -> Result<()> {
     for i in safe {
         print!("  {} … ", i.name);
         std::io::stdout().flush()?;
-        match actions::clean(i, &home, &roots) {
+        match actions::clean(i, &home, &roots, &protector) {
             Ok(msg) => {
                 freed += i.reclaimable;
                 println!("ok ({msg})");

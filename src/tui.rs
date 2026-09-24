@@ -23,12 +23,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-const PROTECTED_REASON: &str = "protected by you (pin or config)";
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 enum Msg {
     Scan(ScanMsg),
-    Procs(Box<ProcSnapshot>),
+    Procs(Box<ProcSnapshot>, chrono::DateTime<Utc>),
     Ai {
         key: String,
         provider: String,
@@ -178,6 +177,7 @@ struct App {
     state: State,
     items: Vec<Item>,
     procs: ProcSnapshot,
+    procs_at: chrono::DateTime<Utc>,
     history: Vec<HistoryEntry>,
     disk: Option<DiskInfo>,
     tab: Tab,
@@ -228,6 +228,7 @@ impl App {
         let home = home();
         let roots = resolve_roots(&cfg, &home);
         let state = State::load();
+        let status = state.warning.clone().unwrap_or_default();
         let mut cfg = cfg;
         state.ai.apply(&mut cfg.ai);
         let disk = disk_info(&home);
@@ -245,6 +246,7 @@ impl App {
             state,
             items: Vec::new(),
             procs: ProcSnapshot::default(),
+            procs_at: Utc::now(),
             history: state::read_history(200),
             tab: Tab::Disk,
             sel_id: None,
@@ -257,7 +259,7 @@ impl App {
             search: String::new(),
             searching: false,
             modal: Modal::None,
-            status: String::new(),
+            status,
             scanning: false,
             scan_progress: String::new(),
             scan_secs: None,
@@ -319,7 +321,8 @@ impl App {
         self.procs_loading = true;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(Msg::Procs(Box::new(procs::snapshot())));
+            let at = Utc::now();
+            let _ = tx.send(Msg::Procs(Box::new(procs::snapshot()), at));
         });
     }
 
@@ -337,8 +340,9 @@ impl App {
                 self.scan_secs = Some(secs);
                 self.disk = disk_info(&self.home);
             }
-            Msg::Procs(snap) => {
+            Msg::Procs(snap, at) => {
                 self.procs = *snap;
+                self.procs_at = at;
                 self.procs_loading = false;
                 let live: HashSet<u32> = self.procs.dev.iter().map(|p| p.pid).collect();
                 self.marked_pids.retain(|p| live.contains(p));
@@ -408,12 +412,7 @@ impl App {
             .collect();
         let items = &self.items;
         match self.sort {
-            Sort::Verdict => v.sort_by(|&a, &b| {
-                let (a, b) = (&items[a], &items[b]);
-                a.effective_verdict()
-                    .cmp(&b.effective_verdict())
-                    .then(b.reclaimable.max(b.bytes / 8).cmp(&a.reclaimable.max(a.bytes / 8)))
-            }),
+            Sort::Verdict => v.sort_by(|&a, &b| items[a].listing_order(&items[b])),
             Sort::Size => v.sort_by(|&a, &b| items[b].bytes.cmp(&items[a].bytes)),
             Sort::Age => v.sort_by(|&a, &b| items[a].last_used.cmp(&items[b].last_used)),
             Sort::Name => v.sort_by(|&a, &b| items[a].name.to_lowercase().cmp(&items[b].name.to_lowercase())),
@@ -924,13 +923,10 @@ impl App {
         let Some(id) = self.selected_item().map(|i| i.id.clone()) else { return };
         let pinned = self.state.toggle_pin(&id);
         let _ = self.state.save();
-        let protector = Protector::new(&self.cfg.protect, self.state.pins.clone(), &self.home);
+        let protector = self.protector();
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
-            item.protected = protector.is_protected(item);
-            item.reasons.retain(|r| r != PROTECTED_REASON);
-            if item.protected {
-                item.reasons.insert(0, PROTECTED_REASON.into());
-            }
+            let protected = protector.is_protected(item);
+            item.set_protected(protected);
             self.status = match (pinned, item.protected) {
                 (true, _) => format!("pinned {}: Dustpan will never clean it", item.name),
                 (false, true) => format!("unpinned {}, but a protect glob in the config still covers it", item.name),
@@ -938,6 +934,10 @@ impl App {
             };
         }
         self.marked.remove(&id);
+    }
+
+    fn protector(&self) -> Protector {
+        Protector::new(&self.cfg.protect, self.state.pins.clone(), &self.home).unwrap_or_else(|_| Protector::everything())
     }
 
     fn do_clean(&mut self, ids: Vec<String>) {
@@ -952,9 +952,10 @@ impl App {
         let tx = self.tx.clone();
         let home = self.home.clone();
         let roots = self.roots.clone();
+        let protector = self.protector();
         std::thread::spawn(move || {
             for item in items {
-                let r = actions::clean(&item, &home, &roots);
+                let r = actions::clean(&item, &home, &roots, &protector);
                 let _ = tx.send(Msg::Cleaned {
                     id: item.id.clone(),
                     ok: r.is_ok(),
@@ -972,10 +973,17 @@ impl App {
     fn do_kill(&mut self, pids: Vec<(u32, String)>) {
         let tx = self.tx.clone();
         self.marked_pids.clear();
+        let mut failures = Vec::new();
+        let mut targets = Vec::new();
+        for (pid, name) in &pids {
+            match self.procs.dev.iter().find(|p| p.pid == *pid) {
+                Some(p) => targets.push(actions::KillTarget::from_proc(p, self.procs_at)),
+                None => failures.push(format!("{name} (pid {pid}) is no longer listed; refresh and try again")),
+            }
+        }
         std::thread::spawn(move || {
-            let mut failures = Vec::new();
-            for (pid, name) in &pids {
-                if let Err(e) = actions::kill(*pid, name) {
+            for t in &targets {
+                if let Err(e) = actions::kill(t) {
                     failures.push(e.to_string());
                 }
             }
