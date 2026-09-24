@@ -2,6 +2,7 @@ use crate::actions;
 use crate::ai;
 use crate::config::{resolve_roots, Config, Protector};
 use crate::model::{Category, Item, Verdict};
+use crate::models::Catalog;
 use crate::procs::{self, fmt_uptime, ProcItem, ProcSnapshot};
 use crate::report::{disk_info, totals, DiskInfo};
 use crate::scan::{self, ScanMsg};
@@ -44,6 +45,7 @@ enum Msg {
         ok: bool,
         msg: String,
     },
+    Catalog(Box<Catalog>),
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -128,9 +130,6 @@ enum Modal {
 }
 
 const AGENTS: &[&str] = &["claude", "codex"];
-const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
-const CLAUDE_MODELS: &[&str] = &["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"];
-const CODEX_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-reserve"];
 
 fn with_current(current: &str, presets: &[&str]) -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
@@ -143,6 +142,24 @@ fn with_current(current: &str, presets: &[&str]) -> Vec<String> {
         }
     }
     v
+}
+
+fn current_model(ai: &crate::config::AiConfig) -> &str {
+    if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model }
+}
+
+fn model_ids(cat: Option<&Catalog>, provider: &str, current: &str) -> Vec<String> {
+    let ids: Vec<&str> = cat
+        .map(|c| c.models(provider).iter().map(|m| m.id.as_str()).collect())
+        .unwrap_or_default();
+    with_current(current, &ids)
+}
+
+fn efforts(cat: Option<&Catalog>, provider: &str, model: &str) -> Vec<String> {
+    match cat {
+        Some(c) => c.efforts_for(provider, model),
+        None => Catalog::default().efforts_for(provider, model),
+    }
 }
 
 fn cycle(list: &[String], current: &str, dir: isize) -> String {
@@ -185,6 +202,9 @@ struct App {
     freed_session: u64,
     free_at_start: Option<u64>,
     range_anchor: Option<String>,
+    catalog: Option<Catalog>,
+    catalog_loading: bool,
+    picker_origin: (String, String),
     persist: bool,
     tick: usize,
     tx: Sender<Msg>,
@@ -214,6 +234,9 @@ impl App {
         App {
             free_at_start: disk.as_ref().map(|d| d.free),
             range_anchor: None,
+            catalog: None,
+            catalog_loading: false,
+            picker_origin: (String::new(), String::new()),
             persist: true,
             disk,
             home,
@@ -359,6 +382,10 @@ impl App {
                     );
                 }
             }
+            Msg::Catalog(cat) => {
+                self.catalog = Some(*cat);
+                self.catalog_loading = false;
+            }
             Msg::Killed { ok, msg } => {
                 self.status = if ok { msg } else { format!("kill failed: {msg}") };
                 self.history = state::read_history(200);
@@ -493,7 +520,7 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.modal = Modal::Help,
-            KeyCode::Char('A') => self.modal = Modal::AiPicker(0),
+            KeyCode::Char('A') => self.open_picker(),
             KeyCode::Down | KeyCode::Up if shift => self.mark_and_move(if k.code == KeyCode::Down { 1 } else { -1 }),
             KeyCode::Char('J') => self.mark_and_move(1),
             KeyCode::Char('K') => self.mark_and_move(-1),
@@ -713,13 +740,49 @@ impl App {
         };
         match row {
             0 => ai.provider = cycle(&with_current("", AGENTS), &ai.provider, dir),
-            1 if ai.provider == "codex" => {
-                ai.codex_model = cycle(&with_current(&ai.codex_model, CODEX_MODELS), &ai.codex_model, dir)
+            1 => {
+                let origin = if ai.provider == "codex" { &self.picker_origin.1 } else { &self.picker_origin.0 };
+                let ids = model_ids(self.catalog.as_ref(), &ai.provider, origin);
+                let next = cycle(&ids, current_model(ai), dir);
+                if ai.provider == "codex" {
+                    ai.codex_model = next;
+                } else {
+                    ai.claude_model = next;
+                }
             }
-            1 => ai.claude_model = cycle(&with_current(&ai.claude_model, CLAUDE_MODELS), &ai.claude_model, dir),
-            _ => ai.effort = cycle(&with_current("", EFFORTS), &ai.effort, dir),
+            _ => {
+                let efforts = efforts(self.catalog.as_ref(), &ai.provider, current_model(ai));
+                ai.effort = cycle(&efforts, &ai.effort, dir);
+            }
+        }
+        if row < 2 {
+            let supported = efforts(self.catalog.as_ref(), &ai.provider, current_model(ai));
+            if !supported.contains(&ai.effort) {
+                let default = self
+                    .catalog
+                    .as_ref()
+                    .and_then(|c| c.default_effort(&ai.provider, current_model(ai)));
+                ai.effort = ["medium".to_string()]
+                    .into_iter()
+                    .chain(default)
+                    .find(|e| supported.contains(e))
+                    .or_else(|| supported.first().cloned())
+                    .unwrap_or_default();
+            }
         }
         self.modal = Modal::AiPicker(row);
+    }
+
+    fn open_picker(&mut self) {
+        self.modal = Modal::AiPicker(0);
+        self.picker_origin = (self.cfg.ai.claude_model.clone(), self.cfg.ai.codex_model.clone());
+        if self.catalog.is_none() && !self.catalog_loading {
+            self.catalog_loading = true;
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(Msg::Catalog(Box::new(crate::models::fetch())));
+            });
+        }
     }
 
     fn ai_label(&self) -> String {
@@ -732,12 +795,13 @@ impl App {
 
     fn draw_ai_picker(&self, f: &mut Frame, row: usize) {
         let ai = &self.cfg.ai;
-        let model = if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model };
-        let rows = [("agent", ai.provider.as_str()), ("model", model.as_str()), ("effort", ai.effort.as_str())];
+        let model = current_model(ai);
+        let rows = [("agent", ai.provider.as_str()), ("model", model), ("effort", ai.effort.as_str())];
         let mut lines = vec![
             Line::from("Who answers when you press x on an item or process."),
             Line::from(""),
         ];
+        let dim = Style::new().fg(Color::DarkGray);
         for (i, (label, value)) in rows.iter().enumerate() {
             let selected = i == row;
             let style = if selected {
@@ -753,10 +817,34 @@ impl App {
             ]));
         }
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Models beyond these presets: set ai.claude_model / ai.codex_model in the config.",
-            Style::new().fg(Color::DarkGray),
-        )));
+        match &self.catalog {
+            None => lines.push(Line::from(Span::styled(
+                format!("{} asking claude and codex for their models…", SPINNER[self.tick % SPINNER.len()]),
+                Style::new().fg(Color::Cyan),
+            ))),
+            Some(cat) => {
+                let listed = cat.models(&ai.provider);
+                match listed.iter().find(|m| m.id == model) {
+                    Some(m) if !m.about.is_empty() => lines.push(Line::from(Span::styled(m.about.clone(), dim))),
+                    Some(_) => {}
+                    None => lines.push(Line::from(Span::styled(
+                        format!("{model} is from your config; {} doesn't list it", ai.provider),
+                        Style::new().fg(Color::Yellow),
+                    ))),
+                }
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "{} models · efforts: {}",
+                        listed.len(),
+                        efforts(Some(cat), &ai.provider, model).join(", ")
+                    ),
+                    dim,
+                )));
+                for n in &cat.notes {
+                    lines.push(Line::from(Span::styled(format!("note: {n}"), dim)));
+                }
+            }
+        }
         let keys = Line::from(Span::styled(
             "↑↓ choose · ←→ change · any other key saves and closes",
             Style::new().fg(Color::DarkGray),
@@ -1676,6 +1764,56 @@ mod tests {
         assert_eq!(app.cfg.ai.effort, "high");
         assert_eq!(app.state.ai.provider.as_deref(), Some("codex"));
         assert_eq!(app.ai_label(), "codex gpt-5.6-sol · high");
+    }
+
+    fn catalog() -> Catalog {
+        use crate::models::ModelOption;
+        let m = |id: &str, efforts: &[&str], default: &str| ModelOption {
+            id: id.into(),
+            about: format!("{id} about"),
+            efforts: efforts.iter().map(|e| e.to_string()).collect(),
+            default_effort: Some(default.into()),
+        };
+        Catalog {
+            codex: vec![m("gpt-a", &["low", "medium", "high"], "medium"), m("gpt-b", &["low", "xhigh"], "low")],
+            claude: vec![m("opus", &[], ""), m("sonnet", &[], "")],
+            claude_efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
+            notes: vec!["test note".into()],
+        }
+    }
+
+    #[test]
+    fn picker_lists_queried_models_and_snaps_unsupported_effort() {
+        let mut app = app_with_items();
+        app.catalog = Some(catalog());
+        app.cfg.ai.codex_model = "gpt-a".into();
+        key(&mut app, KeyCode::Char('A'));
+        assert!(!app.catalog_loading, "an existing catalog must not be refetched");
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.cfg.ai.provider, "codex");
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.cfg.ai.codex_model, "gpt-b");
+        assert_eq!(app.cfg.ai.effort, "low", "medium isn't offered by gpt-b, so it snaps to gpt-b's default");
+        let screen = render(&app, 120, 30);
+        assert!(screen.contains("gpt-b about"));
+        assert!(screen.contains("efforts: low, xhigh"));
+        assert!(screen.contains("test note"));
+    }
+
+    #[test]
+    fn picker_keeps_a_configured_model_the_catalog_lacks() {
+        let mut app = app_with_items();
+        app.catalog = Some(catalog());
+        app.cfg.ai.claude_model = "claude-opus-5".into();
+        key(&mut app, KeyCode::Char('A'));
+        let screen = render(&app, 120, 30);
+        assert!(screen.contains("claude-opus-5 is from your config"));
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.cfg.ai.claude_model, "opus");
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.cfg.ai.claude_model, "claude-opus-5");
     }
 
     #[test]

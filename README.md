@@ -76,7 +76,7 @@ Filter first (`f` state, `c` kind, `/` search) to keep `a` and `*` to what you m
 
 ## AI context
 
-Press `A` in the TUI to pick the agent (Claude or Codex), model, and effort. The choice is saved for later runs and used by `dp ask` too, which also takes `--provider`, `--model`, and `--effort`. `x` on an item (or `dp ask`) runs `claude -p` or `codex exec --sandbox read-only` in that folder. The call includes the facts Dustpan gathered and asks for a verdict. Claude's tools are limited to read-only ones (Read/Glob/Grep, `ls`, `du`, `git status/log`, `ps`, `lsof`…). Answers are saved per item in `~/.local/state/dustpan/state.json` and show in the details pane on later runs.
+Press `A` in the TUI to pick the agent (Claude or Codex), model, and effort. The picker asks the CLIs what is available when it opens: `codex debug models` gives the models your account can use and each one's effort levels. Claude Code can't list model IDs, so Dustpan offers the aliases and efforts from `claude --help`, plus every model from the Anthropic Models API when `ANTHROPIC_API_KEY` is set. A model from your config stays in the list even if neither CLI reports it. The choice is saved for later runs and used by `dp ask` too, which also takes `--provider`, `--model`, and `--effort`. `x` on an item (or `dp ask`) runs `claude -p` or `codex exec --sandbox read-only` in that folder. The call includes the facts Dustpan gathered and asks for a verdict. Claude's tools are limited to read-only ones (Read/Glob/Grep, `ls`, `du`, `git status/log`, `ps`, `lsof`…). Answers are saved per item in `~/.local/state/dustpan/state.json` and show in the details pane on later runs.
 
 ## Config
 

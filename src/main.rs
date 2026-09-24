@@ -3,6 +3,7 @@ mod ai;
 mod config;
 mod git;
 mod model;
+mod models;
 mod procs;
 mod report;
 mod scan;
