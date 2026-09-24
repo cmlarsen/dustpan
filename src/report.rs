@@ -1,5 +1,5 @@
 use crate::model::{Category, Item, Verdict};
-use crate::procs::{fmt_uptime, ProcSnapshot};
+use crate::procs::{ProcSnapshot, fmt_uptime};
 use crate::util::{ago, home, human};
 use chrono::Utc;
 use std::collections::BTreeMap;
@@ -69,18 +69,33 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
         );
     }
     let t = totals(items);
-    let line: Vec<String> = [Verdict::Safe, Verdict::Review, Verdict::Active, Verdict::Keep]
-        .iter()
-        .filter_map(|v| t.get(v).map(|(b, n)| format!("{} {} in {n}", v.label(), human(*b))))
-        .collect();
+    let line: Vec<String> = [
+        Verdict::Safe,
+        Verdict::Review,
+        Verdict::Active,
+        Verdict::Keep,
+    ]
+    .iter()
+    .filter_map(|v| {
+        t.get(v)
+            .map(|(b, n)| format!("{} {} in {n}", v.label(), human(*b)))
+    })
+    .collect();
     println!("{}\n", line.join(" · "));
 
     for verdict in [Verdict::Safe, Verdict::Review] {
-        let list: Vec<&Item> = items.iter().filter(|i| i.effective_verdict() == verdict).collect();
+        let list: Vec<&Item> = items
+            .iter()
+            .filter(|i| i.effective_verdict() == verdict)
+            .collect();
         if list.is_empty() {
             continue;
         }
-        println!("{} ({})", verdict.label(), human(list.iter().map(|i| i.reclaimable).sum()));
+        println!(
+            "{} ({})",
+            verdict.label(),
+            human(list.iter().map(|i| i.reclaimable).sum())
+        );
         for i in list.iter().take(if verbose { usize::MAX } else { 25 }) {
             println!(
                 "  {:>7}  {:>4}  {:<14} {}",
@@ -89,7 +104,13 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
                 i.category.label(),
                 safe_inline(&i.name)
             );
-            println!("  {:>7}  {:>4}  {:<14} └ {}", "", "", "", safe_inline(i.reasons.first().map(String::as_str).unwrap_or_default()));
+            println!(
+                "  {:>7}  {:>4}  {:<14} └ {}",
+                "",
+                "",
+                "",
+                safe_inline(i.reasons.first().map(String::as_str).unwrap_or_default())
+            );
         }
         if !verbose && list.len() > 25 {
             println!("  … {} more (dp report --all)", list.len() - 25);
@@ -98,7 +119,10 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
     }
 
     let mut by_cat: BTreeMap<Category, (u64, usize)> = BTreeMap::new();
-    for i in items.iter().filter(|i| matches!(i.effective_verdict(), Verdict::Active | Verdict::Keep)) {
+    for i in items
+        .iter()
+        .filter(|i| matches!(i.effective_verdict(), Verdict::Active | Verdict::Keep))
+    {
         let e = by_cat.entry(i.category).or_default();
         e.0 += i.bytes;
         e.1 += 1;
@@ -110,7 +134,10 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
             .collect();
         println!("In use or kept: {}", parts.join(" · "));
         if verbose {
-            for i in items.iter().filter(|i| matches!(i.effective_verdict(), Verdict::Active | Verdict::Keep)) {
+            for i in items
+                .iter()
+                .filter(|i| matches!(i.effective_verdict(), Verdict::Active | Verdict::Keep))
+            {
                 println!(
                     "  {:>7}  {:<6} {:<14} {} — {}",
                     human(i.bytes),
@@ -138,14 +165,27 @@ pub fn print_mem(snap: &ProcSnapshot) {
     );
     println!("\nTop apps by memory:");
     for (name, bytes, n) in snap.apps.iter().take(12) {
-        println!("  {:>7}  {}{}", human(*bytes), safe_inline(name), if *n > 1 { format!(" ({n} processes)") } else { String::new() });
+        println!(
+            "  {:>7}  {}{}",
+            human(*bytes),
+            safe_inline(name),
+            if *n > 1 {
+                format!(" ({n} processes)")
+            } else {
+                String::new()
+            }
+        );
     }
     let flagged: Vec<_> = snap
         .dev
         .iter()
         .filter(|p| matches!(p.verdict, Verdict::Safe | Verdict::Review))
         .collect();
-    println!("\nDev processes: {} running, {} worth a look", snap.dev.len(), flagged.len());
+    println!(
+        "\nDev processes: {} running, {} worth a look",
+        snap.dev.len(),
+        flagged.len()
+    );
     for p in snap.dev.iter().take(30) {
         println!(
             "  {:<6} {:>7}  {:>4}  pid {:<6} {:<18} {}",

@@ -1,6 +1,6 @@
 use crate::model::{Action, Item};
 use crate::util::expand;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -87,7 +87,12 @@ pub fn load_from(path: &Path, home: &Path) -> Result<Config> {
             std::fs::create_dir_all(dir)?;
         }
         let body = toml::to_string_pretty(&cfg)?;
-        match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
             Ok(mut f) => {
                 f.write_all(format!("{TEMPLATE_HEADER}{body}").as_bytes())?;
                 return Ok(cfg);
@@ -96,9 +101,12 @@ pub fn load_from(path: &Path, home: &Path) -> Result<Config> {
             Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
         }
     }
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let cfg: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    Protector::new(&cfg.protect, BTreeSet::new(), home).with_context(|| format!("in {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let cfg: Config =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    Protector::new(&cfg.protect, BTreeSet::new(), home)
+        .with_context(|| format!("in {}", path.display()))?;
     Ok(cfg)
 }
 
@@ -183,7 +191,9 @@ impl Protector {
             if !is_glob(&base) {
                 let path = PathBuf::from(&base);
                 if !path.is_absolute() {
-                    bail!("protect pattern {p:?} must be an absolute path, start with ~/, or be a glob");
+                    bail!(
+                        "protect pattern {p:?} must be an absolute path, start with ~/, or be a glob"
+                    );
                 }
                 if let Ok(real) = std::fs::canonicalize(&path) {
                     prefixes.push(lower(&real));
@@ -229,12 +239,21 @@ impl Protector {
         if self.everything {
             return true;
         }
-        [p.to_path_buf(), crate::actions::resolve_parent(p)].iter().any(|c| {
-            let low = lower(c);
-            self.globs.is_match(c)
-                || self.prefixes.iter().any(|pre| low.starts_with(pre) || (or_contains && pre.starts_with(&low)))
-                || (or_contains && self.prefixes_of_globs.iter().any(|pre| pre.starts_with(&low)))
-        })
+        [p.to_path_buf(), crate::actions::resolve_parent(p)]
+            .iter()
+            .any(|c| {
+                let low = lower(c);
+                self.globs.is_match(c)
+                    || self
+                        .prefixes
+                        .iter()
+                        .any(|pre| low.starts_with(pre) || (or_contains && pre.starts_with(&low)))
+                    || (or_contains
+                        && self
+                            .prefixes_of_globs
+                            .iter()
+                            .any(|pre| pre.starts_with(&low)))
+            })
     }
 
     pub fn protects_path(&self, p: &Path) -> bool {
@@ -242,7 +261,9 @@ impl Protector {
     }
 
     pub fn check_action(&self, action: &Action) -> Result<()> {
-        let Action::Delete { paths, .. } = action else { return Ok(()) };
+        let Action::Delete { paths, .. } = action else {
+            return Ok(());
+        };
         match paths.iter().find(|p| self.protects_path(p)) {
             Some(p) => bail!("{} is protected by your config", p.display()),
             None => Ok(()),
@@ -266,7 +287,10 @@ mod tests {
     fn protect_globs_cover_folder_and_children_and_owner() {
         let home = Path::new("/Users/me");
         let p = Protector::new(
-            &["~/Work/MyApp".into(), "~/Library/Developer/Xcode/DerivedData/Keep-*".into()],
+            &[
+                "~/Work/MyApp".into(),
+                "~/Library/Developer/Xcode/DerivedData/Keep-*".into(),
+            ],
             BTreeSet::new(),
             home,
         )
@@ -274,7 +298,9 @@ mod tests {
         let item = |path: &str| Item::new(Category::DerivedData, "x", path);
         assert!(p.is_protected(&item("/Users/me/Work/MyApp")));
         assert!(p.is_protected(&item("/Users/me/Work/MyApp/node_modules")));
-        assert!(p.is_protected(&item("/Users/me/Library/Developer/Xcode/DerivedData/Keep-abc")));
+        assert!(p.is_protected(&item(
+            "/Users/me/Library/Developer/Xcode/DerivedData/Keep-abc"
+        )));
         assert!(!p.is_protected(&item("/Users/me/Work/MyApp-other")));
 
         let mut dd = item("/Users/me/Library/Developer/Xcode/DerivedData/MyApp-zzz");
@@ -285,24 +311,47 @@ mod tests {
     #[test]
     fn plain_protect_paths_are_prefixes_not_globs() {
         let home = Path::new("/Users/me");
-        let p = Protector::new(&["~/Work/My App/".into(), "/Users/me/Work/mono/apps/legacy".into()], BTreeSet::new(), home).unwrap();
+        let p = Protector::new(
+            &[
+                "~/Work/My App/".into(),
+                "/Users/me/Work/mono/apps/legacy".into(),
+            ],
+            BTreeSet::new(),
+            home,
+        )
+        .unwrap();
         assert!(p.protects_path(Path::new("/Users/me/Work/My App")));
         assert!(p.protects_path(Path::new("/Users/me/Work/My App/ios/build")));
         assert!(p.protects_path(Path::new("/Users/me/work/my app/ios")));
         assert!(!p.protects_path(Path::new("/Users/me/Work/My Apps")));
-        assert!(p.protects_path(Path::new("/Users/me/Work/mono")), "deleting an ancestor would delete it too");
+        assert!(
+            p.protects_path(Path::new("/Users/me/Work/mono")),
+            "deleting an ancestor would delete it too"
+        );
         assert!(!p.protects_path(Path::new("/Users/me/Work/mono/apps/web/node_modules")));
 
-        let mut nm = Item::new(Category::NodeModules, "x", "/Users/me/Work/mono/node_modules");
+        let mut nm = Item::new(
+            Category::NodeModules,
+            "x",
+            "/Users/me/Work/mono/node_modules",
+        );
         nm.owner = Some("/Users/me/Work/mono".into());
         nm.action = Action::delete_all(vec!["/Users/me/Work/mono/apps/web/node_modules".into()]);
-        assert!(!p.is_protected(&nm), "an owner that merely contains a protected folder isn't protected");
+        assert!(
+            !p.is_protected(&nm),
+            "an owner that merely contains a protected folder isn't protected"
+        );
         nm.action = Action::delete_all(vec![
             "/Users/me/Work/mono/apps/web/node_modules".into(),
             "/Users/me/Work/mono/apps/legacy/node_modules".into(),
         ]);
         assert!(p.is_protected(&nm));
-        assert!(p.check_action(&nm.action).unwrap_err().to_string().contains("apps/legacy/node_modules"));
+        assert!(
+            p.check_action(&nm.action)
+                .unwrap_err()
+                .to_string()
+                .contains("apps/legacy/node_modules")
+        );
     }
 
     #[test]
@@ -311,7 +360,12 @@ mod tests {
         let real = d.path().join("real/proj");
         std::fs::create_dir_all(&real).unwrap();
         std::os::unix::fs::symlink(d.path().join("real"), d.path().join("link")).unwrap();
-        let p = Protector::new(&[d.path().join("link/proj").display().to_string()], BTreeSet::new(), d.path()).unwrap();
+        let p = Protector::new(
+            &[d.path().join("link/proj").display().to_string()],
+            BTreeSet::new(),
+            d.path(),
+        )
+        .unwrap();
         assert!(p.protects_path(&real.join("node_modules")));
         let q = Protector::new(&[real.display().to_string()], BTreeSet::new(), d.path()).unwrap();
         assert!(q.protects_path(&d.path().join("link/proj/node_modules")));
@@ -319,11 +373,30 @@ mod tests {
 
     #[test]
     fn invalid_protect_glob_is_an_error_naming_it() {
-        let e = Protector::new(&["~/Work/[oops".into()], BTreeSet::new(), Path::new("/Users/me")).err().unwrap();
+        let e = Protector::new(
+            &["~/Work/[oops".into()],
+            BTreeSet::new(),
+            Path::new("/Users/me"),
+        )
+        .err()
+        .unwrap();
         assert!(format!("{e:#}").contains("~/Work/[oops"), "{e:#}");
-        let e = Protector::new(&["Work/MyApp".into()], BTreeSet::new(), Path::new("/Users/me")).err().unwrap();
+        let e = Protector::new(
+            &["Work/MyApp".into()],
+            BTreeSet::new(),
+            Path::new("/Users/me"),
+        )
+        .err()
+        .unwrap();
         assert!(format!("{e:#}").contains("Work/MyApp"), "{e:#}");
-        assert!(Protector::new(&["**/keep-me".into()], BTreeSet::new(), Path::new("/Users/me")).is_ok());
+        assert!(
+            Protector::new(
+                &["**/keep-me".into()],
+                BTreeSet::new(),
+                Path::new("/Users/me")
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -352,7 +425,10 @@ mod tests {
         let path = d.path().join("dustpan/config.toml");
         let cfg = load_from(&path, d.path()).unwrap();
         assert_eq!(cfg.stale_days, 30);
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert_eq!(load_from(&path, d.path()).unwrap().min_size_mb, 100);
     }
 

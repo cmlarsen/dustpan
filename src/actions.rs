@@ -1,8 +1,8 @@
 use crate::config::Protector;
 use crate::model::{Action, Item, Verdict};
 use crate::procs::ProcItem;
-use crate::state::{append_history, HistoryEntry};
-use anyhow::{anyhow, bail, Context, Result};
+use crate::state::{HistoryEntry, append_history};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -29,7 +29,9 @@ fn strip_prefix_ci(p: &Path, base: &Path) -> Option<PathBuf> {
     let mut rest = p.components();
     for b in base.components() {
         let c = rest.next()?;
-        if c.as_os_str().to_string_lossy().to_lowercase() != b.as_os_str().to_string_lossy().to_lowercase() {
+        if c.as_os_str().to_string_lossy().to_lowercase()
+            != b.as_os_str().to_string_lossy().to_lowercase()
+        {
             return None;
         }
     }
@@ -67,18 +69,25 @@ pub fn resolve_parent(p: &Path) -> PathBuf {
 fn own_temp_dir() -> Option<PathBuf> {
     let tmp = std::fs::canonicalize(std::env::temp_dir()).ok()?;
     let folders = Path::new("/private/var/folders");
-    (tmp.starts_with(folders) && tmp.components().count() > folders.components().count() + 1).then_some(tmp)
+    (tmp.starts_with(folders) && tmp.components().count() > folders.components().count() + 1)
+        .then_some(tmp)
 }
 
 fn check_location(p: &Path, home: &Path, roots: &[PathBuf], temps: &[PathBuf]) -> Result<()> {
     if home.components().count() < 3 {
-        bail!("refusing to delete anything while home is {}", home.display());
+        bail!(
+            "refusing to delete anything while home is {}",
+            home.display()
+        );
     }
     if let Some(rel) = strip_prefix_ci(p, home) {
         if rel.components().count() < 2 {
             bail!("refusing a top-level folder of your home: {}", p.display());
         }
-        if let Some(f) = FORBIDDEN.iter().find(|f| starts_with_ci(&rel, Path::new(f))) {
+        if let Some(f) = FORBIDDEN
+            .iter()
+            .find(|f| starts_with_ci(&rel, Path::new(f)))
+        {
             bail!("refusing anything under ~/{f}");
         }
     } else if !temps
@@ -88,23 +97,40 @@ fn check_location(p: &Path, home: &Path, roots: &[PathBuf], temps: &[PathBuf]) -
         bail!("refusing path outside your home folder: {}", p.display());
     }
     if let Some(r) = roots.iter().find(|r| starts_with_ci(r, p)) {
-        bail!("refusing {}: it contains project root {}", p.display(), r.display());
+        bail!(
+            "refusing {}: it contains project root {}",
+            p.display(),
+            r.display()
+        );
     }
     Ok(())
 }
 
-pub fn guard_delete(p: &Path, home: &Path, roots: &[PathBuf], allow_git_clones: bool) -> Result<()> {
+pub fn guard_delete(
+    p: &Path,
+    home: &Path,
+    roots: &[PathBuf],
+    allow_git_clones: bool,
+) -> Result<()> {
     if !p.is_absolute() {
         bail!("refusing relative path {}", p.display());
     }
-    if p.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
+    if p.components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
         bail!("refusing path with .. in it: {}", p.display());
     }
     let temp: Vec<PathBuf> = own_temp_dir().into_iter().collect();
-    let raw_temps: Vec<PathBuf> = temp.iter().flat_map(|t| [std::env::temp_dir(), t.clone()]).collect();
+    let raw_temps: Vec<PathBuf> = temp
+        .iter()
+        .flat_map(|t| [std::env::temp_dir(), t.clone()])
+        .collect();
     check_location(p, home, roots, &raw_temps)?;
     let real = resolve_parent(p);
-    let all_roots: Vec<PathBuf> = roots.iter().flat_map(|r| [r.clone(), resolve_existing(r)]).collect();
+    let all_roots: Vec<PathBuf> = roots
+        .iter()
+        .flat_map(|r| [r.clone(), resolve_existing(r)])
+        .collect();
     check_location(&real, &resolve_existing(home), &all_roots, &temp)?;
     if !allow_git_clones && p.join(".git").is_dir() {
         bail!("refusing {}: it is a git repository", p.display());
@@ -123,11 +149,19 @@ fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-pub fn preflight(action: &Action, home: &Path, roots: &[PathBuf], protector: &Protector) -> Result<()> {
+pub fn preflight(
+    action: &Action,
+    home: &Path,
+    roots: &[PathBuf],
+    protector: &Protector,
+) -> Result<()> {
     protector.check_action(action)?;
     match action {
         Action::None => Ok(()),
-        Action::Delete { paths, allow_git_clones } => {
+        Action::Delete {
+            paths,
+            allow_git_clones,
+        } => {
             for p in paths {
                 guard_delete(p, home, roots, *allow_git_clones)?;
             }
@@ -147,7 +181,8 @@ pub fn apply_preflight(item: &mut Item, home: &Path, roots: &[PathBuf], protecto
         if item.verdict == Verdict::Safe {
             item.verdict = Verdict::Review;
         }
-        item.reasons.push(format!("Dustpan won't clean this automatically: {e:#}"));
+        item.reasons
+            .push(format!("Dustpan won't clean this automatically: {e:#}"));
         item.action = Action::None;
     }
 }
@@ -156,7 +191,9 @@ fn remove(p: &Path) -> Result<()> {
     match std::fs::symlink_metadata(p) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.into()),
-        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p).with_context(|| format!("deleting {}", p.display())),
+        Ok(m) if m.is_dir() => {
+            std::fs::remove_dir_all(p).with_context(|| format!("deleting {}", p.display()))
+        }
         Ok(_) => std::fs::remove_file(p).with_context(|| format!("deleting {}", p.display())),
     }
 }
@@ -182,12 +219,20 @@ fn check_missing_worktree(program: &str, args: &[String]) -> Result<()> {
     }
 }
 
-pub fn execute(action: &Action, home: &Path, roots: &[PathBuf], protector: &Protector) -> Result<String> {
+pub fn execute(
+    action: &Action,
+    home: &Path,
+    roots: &[PathBuf],
+    protector: &Protector,
+) -> Result<String> {
     check_not_root(euid())?;
     protector.check_action(action)?;
     match action {
         Action::None => bail!("this item has no automatic action"),
-        Action::Delete { paths, allow_git_clones } => {
+        Action::Delete {
+            paths,
+            allow_git_clones,
+        } => {
             for p in paths {
                 guard_delete(p, home, roots, *allow_git_clones)?;
             }
@@ -202,18 +247,29 @@ pub fn execute(action: &Action, home: &Path, roots: &[PathBuf], protector: &Prot
             let out = crate::util::run(program, &args, cwd.as_deref(), Duration::from_secs(1800))
                 .with_context(|| format!("could not run {program} (missing or timed out)"))?;
             if !out.ok {
-                let msg = if out.stderr.trim().is_empty() { out.stdout } else { out.stderr };
+                let msg = if out.stderr.trim().is_empty() {
+                    out.stdout
+                } else {
+                    out.stderr
+                };
                 bail!("{program} failed: {}", msg.trim());
             }
             let last = out.stdout.lines().last().unwrap_or("").trim().to_string();
-            Ok(if last.is_empty() { format!("{program} finished") } else { last })
+            Ok(if last.is_empty() {
+                format!("{program} finished")
+            } else {
+                last
+            })
         }
     }
 }
 
 pub fn clean(item: &Item, home: &Path, roots: &[PathBuf], protector: &Protector) -> Result<String> {
     if item.protected || protector.is_protected(item) {
-        bail!("{} is protected; unpin it or change `protect` in the config first", item.name);
+        bail!(
+            "{} is protected; unpin it or change `protect` in the config first",
+            item.name
+        );
     }
     if !item.cleanable() {
         bail!("{} is marked KEEP or has no action", item.name);
@@ -262,13 +318,17 @@ struct LiveProc {
 fn live_proc(pid: libc::pid_t) -> Option<LiveProc> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let n = unsafe {
-        libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size)
-    };
+    let n =
+        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
     if n != size {
         return None;
     }
-    let out = crate::util::run("ps", &["-p", &pid.to_string(), "-o", "comm="], None, Duration::from_secs(5))?;
+    let out = crate::util::run(
+        "ps",
+        &["-p", &pid.to_string(), "-o", "comm="],
+        None,
+        Duration::from_secs(5),
+    )?;
     Some(LiveProc {
         comm: out.stdout.trim().to_string(),
         started: i64::try_from(info.pbi_start_tvsec).ok()?,
@@ -287,10 +347,19 @@ fn check_pid(pid: u32, own: u32) -> Result<libc::pid_t> {
 
 fn same_process(t: &KillTarget, live: &LiveProc) -> Result<()> {
     if live.comm.is_empty() || live.comm != t.comm.trim() {
-        bail!("pid {} is now {:?}, not {:?}; refresh and try again", t.pid, live.comm, t.comm);
+        bail!(
+            "pid {} is now {:?}, not {:?}; refresh and try again",
+            t.pid,
+            live.comm,
+            t.comm
+        );
     }
     if (live.started - t.started.timestamp()).abs() > START_TOLERANCE_SECS {
-        bail!("pid {} is a different {} than the one listed (it restarted); refresh and try again", t.pid, live.comm);
+        bail!(
+            "pid {} is a different {} than the one listed (it restarted); refresh and try again",
+            t.pid,
+            live.comm
+        );
     }
     Ok(())
 }
@@ -298,7 +367,8 @@ fn same_process(t: &KillTarget, live: &LiveProc) -> Result<()> {
 fn send_term(t: &KillTarget) -> Result<()> {
     check_not_root(euid())?;
     let pid = check_pid(t.pid, std::process::id())?;
-    let live = live_proc(pid).ok_or_else(|| anyhow!("pid {} ({}) is no longer running", t.pid, t.name))?;
+    let live =
+        live_proc(pid).ok_or_else(|| anyhow!("pid {} ({}) is no longer running", t.pid, t.name))?;
     same_process(t, &live)?;
     if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
         bail!("kill {}: {}", t.pid, std::io::Error::last_os_error());
@@ -317,7 +387,11 @@ pub fn kill(t: &KillTarget) -> Result<()> {
         bytes: 0,
         action: format!("kill -TERM {pid}"),
         ok: result.is_ok(),
-        message: result.as_ref().err().map(|e| e.to_string()).unwrap_or_else(|| "sent SIGTERM".into()),
+        message: result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "sent SIGTERM".into()),
     });
     result
 }
@@ -341,7 +415,9 @@ mod tests {
         let home = Path::new("/Users/me");
         let roots = vec![PathBuf::from("/Users/me/Work")];
         let ok = |p: &str| guard_delete(Path::new(p), home, &roots, false).is_ok();
-        assert!(ok("/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc"));
+        assert!(ok(
+            "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc"
+        ));
         assert!(ok("/Users/me/.cache/uv"));
         assert!(!ok("/Users/me/Library"));
         assert!(!ok("/Users/me"));
@@ -359,7 +435,15 @@ mod tests {
         let home = Path::new("/Users/me");
         let Some(tmp) = own_temp_dir() else { return };
         assert!(guard_delete(&tmp.join("CFNetworkDownload_1.tmp"), home, &[], false).is_ok());
-        assert!(guard_delete(&std::env::temp_dir().join("CFNetworkDownload_1.tmp"), home, &[], false).is_ok());
+        assert!(
+            guard_delete(
+                &std::env::temp_dir().join("CFNetworkDownload_1.tmp"),
+                home,
+                &[],
+                false
+            )
+            .is_ok()
+        );
         assert!(guard_delete(&tmp, home, &[], false).is_err());
         assert!(guard_delete(tmp.parent().unwrap(), home, &[], false).is_err());
         assert!(guard_delete(&tmp.parent().unwrap().join("C/other"), home, &[], false).is_err());
@@ -385,11 +469,15 @@ mod tests {
         let home = d.path();
         std::fs::create_dir_all(home.join("Documents/secret")).unwrap();
         std::fs::create_dir_all(home.join("Library/Caches")).unwrap();
-        std::os::unix::fs::symlink(home.join("Documents"), home.join("Library/Caches/link")).unwrap();
+        std::os::unix::fs::symlink(home.join("Documents"), home.join("Library/Caches/link"))
+            .unwrap();
         let through = home.join("Library/Caches/link/secret");
         let e = guard_delete(&through, home, &[], false).unwrap_err();
         assert!(format!("{e:#}").contains("Documents"), "{e:#}");
-        assert!(guard_delete(&home.join("Library/Caches/link"), home, &[], false).is_ok(), "a symlink leaf is removed, not followed");
+        assert!(
+            guard_delete(&home.join("Library/Caches/link"), home, &[], false).is_ok(),
+            "a symlink leaf is removed, not followed"
+        );
 
         std::fs::create_dir_all(home.join("Work/Proj")).unwrap();
         std::os::unix::fs::symlink(home.join("Work"), home.join("Library/Caches/work")).unwrap();
@@ -417,7 +505,10 @@ mod tests {
         assert!(guard_delete(&home.join("Other/repo"), home, &roots, false).is_err());
         assert!(guard_delete(&home.join("Other/repo/node_modules"), home, &roots, false).is_ok());
         assert!(guard_delete(&home.join("Other/repo"), home, &roots, true).is_ok());
-        assert!(guard_delete(&home.join("Work"), home, &roots, true).is_err(), "clones flag never unlocks project roots");
+        assert!(
+            guard_delete(&home.join("Work"), home, &roots, true).is_err(),
+            "clones flag never unlocks project roots"
+        );
     }
 
     #[test]
@@ -457,7 +548,11 @@ mod tests {
         for d in [&legacy_nm, &web_nm] {
             std::fs::create_dir_all(d.join("pkg")).unwrap();
         }
-        let mut item = Item::new(Category::NodeModules, "node_modules · ~/Work/mono", mono.join("node_modules"));
+        let mut item = Item::new(
+            Category::NodeModules,
+            "node_modules · ~/Work/mono",
+            mono.join("node_modules"),
+        );
         item.owner = Some(mono.clone());
         item.verdict = Verdict::Safe;
         item.action = Action::delete_all(vec![web_nm.clone(), legacy_nm.clone()]);
@@ -472,7 +567,10 @@ mod tests {
         let protector = protecting(Path::new("~/Work/mono/apps/legacy"), home);
         assert!(protector.is_protected(&item));
         let e = preflight(&item.action, home, &[], &protector).unwrap_err();
-        assert!(format!("{e:#}").contains("apps/legacy/node_modules"), "{e:#}");
+        assert!(
+            format!("{e:#}").contains("apps/legacy/node_modules"),
+            "{e:#}"
+        );
         apply_preflight(&mut item, home, &[], &protector);
         assert!(item.action.is_none());
         assert!(preflight(&item.action, home, &[], &unprotected()).is_ok());
@@ -487,7 +585,10 @@ mod tests {
         assert!(execute(&item.action, home, &[], &protector).is_err());
         assert!(clean(&item, home, &[], &protector).is_err());
         assert!(legacy_nm.exists());
-        assert!(web_nm.exists(), "nothing is deleted when any path is protected");
+        assert!(
+            web_nm.exists(),
+            "nothing is deleted when any path is protected"
+        );
     }
 
     #[test]
@@ -499,10 +600,14 @@ mod tests {
             &["worktree", "remove", checkout.to_str().unwrap()],
             Some(d.path().to_path_buf()),
         );
-        let Action::Run { program, args, .. } = &action else { panic!() };
+        let Action::Run { program, args, .. } = &action else {
+            panic!()
+        };
         assert!(check_missing_worktree(program, args).is_ok());
         std::fs::create_dir_all(&checkout).unwrap();
-        let error = check_missing_worktree(program, args).unwrap_err().to_string();
+        let error = check_missing_worktree(program, args)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("checkout folder now exists"), "{error}");
         assert!(execute(&action, d.path(), &[], &unprotected()).is_err());
         assert!(checkout.exists());
@@ -518,15 +623,27 @@ mod tests {
         for p in [&keep, &old] {
             std::fs::create_dir_all(p.join(".git")).unwrap();
         }
-        let mut item = Item::new(Category::Leftover, "Codex marketplace upgrade staging", &staging);
+        let mut item = Item::new(
+            Category::Leftover,
+            "Codex marketplace upgrade staging",
+            &staging,
+        );
         item.verdict = Verdict::Safe;
         item.action = Action::delete_clones(vec![keep.clone(), old.clone()]);
-        let protector = protecting(Path::new("~/.codex/.tmp/marketplaces/.staging/marketplace-upgrade-keep"), home);
+        let protector = protecting(
+            Path::new("~/.codex/.tmp/marketplaces/.staging/marketplace-upgrade-keep"),
+            home,
+        );
         assert!(protector.is_protected(&item));
         assert!(preflight(&item.action, home, &[], &protector).is_err());
         assert!(execute(&item.action, home, &[], &protector).is_err());
         assert!(keep.exists() && old.exists());
-        let glob = Protector::new(&["~/.codex/.tmp/marketplaces/.staging/*-keep".into()], BTreeSet::new(), home).unwrap();
+        let glob = Protector::new(
+            &["~/.codex/.tmp/marketplaces/.staging/*-keep".into()],
+            BTreeSet::new(),
+            home,
+        )
+        .unwrap();
         assert!(execute(&item.action, home, &[], &glob).is_err());
         assert!(keep.exists() && old.exists());
     }
@@ -537,7 +654,12 @@ mod tests {
         let home = d.path();
         let dd = home.join("Library/Developer/Xcode/DerivedData");
         std::fs::create_dir_all(dd.join("Keep-abc")).unwrap();
-        let glob = Protector::new(&["~/Library/Developer/Xcode/DerivedData/Keep-*".into()], BTreeSet::new(), home).unwrap();
+        let glob = Protector::new(
+            &["~/Library/Developer/Xcode/DerivedData/Keep-*".into()],
+            BTreeSet::new(),
+            home,
+        )
+        .unwrap();
         assert!(execute(&Action::delete(dd.clone()), home, &[], &glob).is_err());
         assert!(dd.join("Keep-abc").exists());
     }
@@ -551,7 +673,11 @@ mod tests {
         std::fs::write(dir.join("sub/f"), b"x").unwrap();
         let file = home.join("Library/Caches/file.tmp");
         std::fs::write(&file, b"x").unwrap();
-        let action = Action::delete_all(vec![dir.clone(), file.clone(), home.join("Library/Caches/missing")]);
+        let action = Action::delete_all(vec![
+            dir.clone(),
+            file.clone(),
+            home.join("Library/Caches/missing"),
+        ]);
         execute(&action, home, &[], &unprotected()).unwrap();
         assert!(!dir.exists());
         assert!(!file.exists());
@@ -565,7 +691,10 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         let action = Action::delete_all(vec![a.clone(), home.join("Documents/x")]);
         assert!(execute(&action, home, &[], &unprotected()).is_err());
-        assert!(a.exists(), "first path must survive when a later one is refused");
+        assert!(
+            a.exists(),
+            "first path must survive when a later one is refused"
+        );
     }
 
     #[test]
@@ -574,7 +703,15 @@ mod tests {
         let home = d.path();
         let a = home.join("Library/Caches/a");
         std::fs::create_dir_all(&a).unwrap();
-        assert!(execute(&Action::delete(a.clone()), home, &[], &Protector::everything()).is_err());
+        assert!(
+            execute(
+                &Action::delete(a.clone()),
+                home,
+                &[],
+                &Protector::everything()
+            )
+            .is_err()
+        );
         assert!(a.exists());
     }
 
@@ -612,7 +749,10 @@ mod tests {
             comm: "/opt/homebrew/bin/node".into(),
             started: now,
         };
-        let live = |comm: &str, started: i64| LiveProc { comm: comm.into(), started };
+        let live = |comm: &str, started: i64| LiveProc {
+            comm: comm.into(),
+            started,
+        };
         assert!(same_process(&t, &live("/opt/homebrew/bin/node", now.timestamp() + 2)).is_ok());
         assert!(same_process(&t, &live("/opt/homebrew/bin/node", now.timestamp() - 2)).is_ok());
         assert!(same_process(&t, &live("/usr/bin/python3", now.timestamp())).is_err());
@@ -622,7 +762,10 @@ mod tests {
 
     #[test]
     fn live_identity_matches_a_ps_snapshot() {
-        let mut child = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
         std::thread::sleep(Duration::from_millis(1200));
         let seen_at = Utc::now();
         let out = std::process::Command::new("ps")
@@ -639,7 +782,10 @@ mod tests {
         };
         let live = live_proc(child.id() as libc::pid_t).unwrap();
         let checked = same_process(&t, &live);
-        let stale = KillTarget { started: t.started - chrono::Duration::hours(3), ..t.clone() };
+        let stale = KillTarget {
+            started: t.started - chrono::Duration::hours(3),
+            ..t.clone()
+        };
         let recycled = same_process(&stale, &live);
         let _ = child.kill();
         let _ = child.wait();

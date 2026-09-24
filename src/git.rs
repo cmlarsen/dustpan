@@ -1,4 +1,4 @@
-use crate::util::{run, run_with, CmdOut};
+use crate::util::{CmdOut, run, run_with};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -39,7 +39,11 @@ pub struct Repo {
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Option<CmdOut> {
-    let args: Vec<&str> = GIT_CONFIG.iter().copied().chain(args.iter().copied()).collect();
+    let args: Vec<&str> = GIT_CONFIG
+        .iter()
+        .copied()
+        .chain(args.iter().copied())
+        .collect();
     run_with("git", &args, Some(dir), GIT_ENV, None, GIT_TIMEOUT)
 }
 
@@ -65,7 +69,9 @@ fn walk_for_repos(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     if depth == 0 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let name = e.file_name();
         let name = name.to_string_lossy();
@@ -140,7 +146,15 @@ pub fn load_repo(root: &Path) -> Repo {
 }
 
 pub fn default_ref(root: &Path) -> Option<String> {
-    if let Some(r) = git(root, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]) {
+    if let Some(r) = git(
+        root,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    ) {
         return Some(r);
     }
     ["origin/main", "origin/master", "origin/beta"]
@@ -226,7 +240,11 @@ pub fn branch_of_ref(r: &str) -> &str {
 }
 
 pub fn pick_pr(prs: &[PrInfo], head: &str, contains: impl Fn(&str) -> bool) -> Option<PrInfo> {
-    if let Some(open) = prs.iter().filter(|p| p.state == PrState::Open).max_by_key(|p| p.number) {
+    if let Some(open) = prs
+        .iter()
+        .filter(|p| p.state == PrState::Open)
+        .max_by_key(|p| p.number)
+    {
         return Some(open.clone());
     }
     prs.iter()
@@ -239,7 +257,13 @@ pub fn pr_states(repo: &Path) -> Prs {
     let Some(out) = run(
         "gh",
         &[
-            "pr", "list", "--state", "all", "--limit", "400", "--json",
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "400",
+            "--json",
             "number,headRefName,headRefOid,state,isCrossRepository,baseRefName",
         ],
         Some(repo),
@@ -281,11 +305,14 @@ pub fn parse_pr_json(text: &str) -> Prs {
             "MERGED" => PrState::Merged,
             _ => PrState::Closed,
         };
-        out.by_head.entry(pr.head_ref_name).or_default().push(PrInfo {
-            number: pr.number,
-            state,
-            head_oid: pr.head_ref_oid,
-        });
+        out.by_head
+            .entry(pr.head_ref_name)
+            .or_default()
+            .push(PrInfo {
+                number: pr.number,
+                state,
+                head_oid: pr.head_ref_oid,
+            });
     }
     out
 }
@@ -307,14 +334,21 @@ mod tests {
     }
 
     fn pr(number: u64, state: PrState, oid: &str) -> PrInfo {
-        PrInfo { number, state, head_oid: oid.into() }
+        PrInfo {
+            number,
+            state,
+            head_oid: oid.into(),
+        }
     }
 
     #[test]
     fn pr_json_parses_state_enum_and_skips_forks() {
         let text = r#"[{"number":1,"headRefName":"a","headRefOid":"o1","state":"CLOSED","isCrossRepository":false,"baseRefName":"main"},{"number":2,"headRefName":"a","headRefOid":"o2","state":"MERGED","isCrossRepository":false,"baseRefName":"main"},{"number":3,"headRefName":"b","headRefOid":"o3","state":"OPEN","isCrossRepository":true,"baseRefName":"main"}]"#;
         let p = parse_pr_json(text);
-        assert_eq!(p.by_head["a"], vec![pr(1, PrState::Closed, "o1"), pr(2, PrState::Merged, "o2")]);
+        assert_eq!(
+            p.by_head["a"],
+            vec![pr(1, PrState::Closed, "o1"), pr(2, PrState::Merged, "o2")]
+        );
         assert!(!p.by_head.contains_key("b"));
         assert!(p.bases.contains("main"));
     }
@@ -327,7 +361,10 @@ mod tests {
         assert!(p.for_branch("main", Some("main")).is_empty());
         assert_eq!(p.for_branch("feat", Some("master")).len(), 1);
         let epic = r#"[{"number":1095,"headRefName":"epic","headRefOid":"e","state":"OPEN","isCrossRepository":false,"baseRefName":"main"},{"number":1000,"headRefName":"epic","headRefOid":"e0","state":"MERGED","isCrossRepository":false,"baseRefName":"main"},{"number":1097,"headRefName":"part","headRefOid":"p","state":"MERGED","isCrossRepository":false,"baseRefName":"epic"}]"#;
-        assert_eq!(parse_pr_json(epic).for_branch("epic", Some("main")), vec![pr(1095, PrState::Open, "e")]);
+        assert_eq!(
+            parse_pr_json(epic).for_branch("epic", Some("main")),
+            vec![pr(1095, PrState::Open, "e")]
+        );
         assert_eq!(branch_of_ref("origin/beta"), "beta");
     }
 
@@ -337,16 +374,25 @@ mod tests {
         assert_eq!(pick_pr(&prs, "new", |_| false), None);
         assert_eq!(pick_pr(&prs, "old", |_| false).unwrap().number, 5);
         assert_eq!(pick_pr(&prs, "anc", |o| o == "old").unwrap().number, 5);
-        assert_eq!(pick_pr(&prs, "cur", |_| false).unwrap().state, PrState::Closed);
+        assert_eq!(
+            pick_pr(&prs, "cur", |_| false).unwrap().state,
+            PrState::Closed
+        );
         let both = vec![pr(5, PrState::Merged, "h"), pr(6, PrState::Closed, "h")];
-        assert_eq!(pick_pr(&both, "h", |_| false).unwrap().state, PrState::Merged);
+        assert_eq!(
+            pick_pr(&both, "h", |_| false).unwrap().state,
+            PrState::Merged
+        );
         assert_eq!(pick_pr(&[pr(5, PrState::Merged, "")], "", |_| true), None);
     }
 
     #[test]
     fn open_pr_outranks_merged_for_the_same_branch() {
         let prs = vec![pr(5, PrState::Merged, "h"), pr(8, PrState::Open, "other")];
-        assert_eq!(pick_pr(&prs, "h", |_| true).unwrap(), pr(8, PrState::Open, "other"));
+        assert_eq!(
+            pick_pr(&prs, "h", |_| true).unwrap(),
+            pr(8, PrState::Open, "other")
+        );
     }
 
     #[test]
@@ -358,7 +404,17 @@ mod tests {
             assert!(out.ok, "git {args:?}: {}", out.stderr);
         };
         g(&["init", "-q", "-b", "main"]);
-        g(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one"]);
+        g(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "one",
+        ]);
         std::fs::write(r.join("new.txt"), "x").unwrap();
         let s = worktree_state(r, Some("main"));
         assert_eq!(s.dirty, Some(1));
@@ -367,7 +423,10 @@ mod tests {
         assert_eq!(gitdir_of(r), Some(r.join(".git")));
         let head = git(r, &["rev-parse", "HEAD"]).unwrap();
         assert!(head_contained_in(r, &head));
-        assert!(!head_contained_in(r, "0123456789abcdef0123456789abcdef01234567"));
+        assert!(!head_contained_in(
+            r,
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
     }
 
     #[test]

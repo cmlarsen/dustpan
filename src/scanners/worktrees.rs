@@ -1,13 +1,22 @@
-use super::{tilde, Ctx, Emit};
+use super::{Ctx, Emit, tilde};
 use crate::git::{self, PrInfo, PrState, Prs, Repo, Worktree};
 use crate::model::{Action, Category, Item, Verdict};
-use crate::size::{dir_stats_opts, Opts};
+use crate::size::{Opts, dir_stats_opts};
 use crate::util::{age_days, human, mtime, newer, which};
 use std::path::Path;
 
 pub const MTIME_IGNORE: &[&str] = &[
-    ".git", "node_modules", "Pods", "build", "DerivedData", ".next", "target", "dist", ".turbo",
-    ".expo", ".cache",
+    ".git",
+    "node_modules",
+    "Pods",
+    "build",
+    "DerivedData",
+    ".next",
+    "target",
+    "dist",
+    ".turbo",
+    ".expo",
+    ".cache",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -50,7 +59,9 @@ pub fn classify(f: &WtFacts, stale_days: i64) -> (Verdict, Vec<String>) {
         return (Verdict::Keep, r);
     }
     if let Presence::Unknown(e) = &f.presence {
-        r.push(format!("couldn't check whether the checkout folder exists: {e}"));
+        r.push(format!(
+            "couldn't check whether the checkout folder exists: {e}"
+        ));
         return (Verdict::Review, r);
     }
     if f.presence == Presence::Missing || f.prunable {
@@ -108,10 +119,11 @@ fn classify_present(f: &WtFacts, stale_days: i64) -> (Verdict, Vec<String>) {
         return (Verdict::Active, r);
     }
     if let Some(pr) = f.pr.as_ref().filter(|p| p.state == PrState::Closed)
-        && unpushed == 0 {
-            r.push(format!("PR #{} closed without merging", pr.number));
-            return (Verdict::Review, r);
-        }
+        && unpushed == 0
+    {
+        r.push(format!("PR #{} closed without merging", pr.number));
+        return (Verdict::Review, r);
+    }
     if unpushed > 0 {
         r.push(format!("{unpushed} commit(s) not pushed to any remote"));
         return (Verdict::Keep, r);
@@ -163,7 +175,11 @@ fn build(ctx: &Ctx, repo: &Repo, wt: &Worktree, prs: &Prs) -> Item {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let branch = wt.branch.clone().unwrap_or_else(|| "(detached)".into());
-    let mut item = Item::new(Category::Worktree, format!("{repo_name} · {branch}"), &wt.path);
+    let mut item = Item::new(
+        Category::Worktree,
+        format!("{repo_name} · {branch}"),
+        &wt.path,
+    );
     item.owner = Some(repo.root.clone());
     let presence = Presence::of(&wt.path);
     let default_branch = repo.default_ref.as_deref().map(git::branch_of_ref);
@@ -198,7 +214,9 @@ fn build(ctx: &Ctx, repo: &Repo, wt: &Worktree, prs: &Prs) -> Item {
         facts.merged_ancestor = gs.merged_ancestor;
         facts.idle_days = age_days(item.last_used, ctx.now);
         facts.running = ctx.processes_in(&wt.path);
-        facts.pr = git::pick_pr(&candidates, &wt.head, |oid| git::head_contained_in(&wt.path, oid));
+        facts.pr = git::pick_pr(&candidates, &wt.head, |oid| {
+            git::head_contained_in(&wt.path, oid)
+        });
     }
     let (verdict, mut reasons) = classify(&facts, ctx.cfg.stale_days);
     item.verdict = verdict;
@@ -246,15 +264,24 @@ mod tests {
 
     #[test]
     fn missing_or_prunable_is_safe() {
-        let f = WtFacts { presence: Presence::Missing, ..facts() };
+        let f = WtFacts {
+            presence: Presence::Missing,
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Safe);
-        let f = WtFacts { prunable: true, ..facts() };
+        let f = WtFacts {
+            prunable: true,
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Safe);
     }
 
     #[test]
     fn unstatable_folder_is_review() {
-        let f = WtFacts { presence: Presence::Unknown("permission denied".into()), ..facts() };
+        let f = WtFacts {
+            presence: Presence::Unknown("permission denied".into()),
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Review);
         assert!(r[0].contains("permission denied"));
@@ -277,7 +304,11 @@ mod tests {
 
     #[test]
     fn missing_on_unmounted_volume_is_review() {
-        let f = WtFacts { presence: Presence::Missing, on_volume: true, ..facts() };
+        let f = WtFacts {
+            presence: Presence::Missing,
+            on_volume: true,
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Review);
         assert!(r.iter().any(|x| x.contains("not mounted")));
@@ -285,33 +316,61 @@ mod tests {
 
     #[test]
     fn locked_beats_missing() {
-        let f = WtFacts { presence: Presence::Missing, locked: true, ..facts() };
+        let f = WtFacts {
+            presence: Presence::Missing,
+            locked: true,
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Keep);
-        let f = WtFacts { prunable: true, locked: true, ..facts() };
+        let f = WtFacts {
+            prunable: true,
+            locked: true,
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Keep);
     }
 
     #[test]
     fn unknown_git_state_is_review_not_safe() {
-        let f = WtFacts { dirty: None, pr: pr(PrState::Merged), ..facts() };
+        let f = WtFacts {
+            dirty: None,
+            pr: pr(PrState::Merged),
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Review);
         assert!(r[0].contains("git status"));
-        let f = WtFacts { unpushed: None, merged_ancestor: true, ..facts() };
+        let f = WtFacts {
+            unpushed: None,
+            merged_ancestor: true,
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Review);
         assert!(r[0].contains("git rev-list"));
-        let f = WtFacts { dirty: Some(1), unpushed: None, ..facts() };
+        let f = WtFacts {
+            dirty: Some(1),
+            unpushed: None,
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Keep);
     }
 
     #[test]
     fn unknown_processes_block_safe() {
-        let f = WtFacts { running: None, pr: pr(PrState::Merged), ..facts() };
+        let f = WtFacts {
+            running: None,
+            pr: pr(PrState::Merged),
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Review);
         assert!(r.iter().any(|x| x.contains("lsof")));
-        let f = WtFacts { running: None, idle_days: Some(2), ..facts() };
+        let f = WtFacts {
+            running: None,
+            idle_days: Some(2),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Active);
     }
 
@@ -320,19 +379,46 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let r = d.path().join("r");
         let g = |args: &[&str]| {
-            let out = crate::util::run("git", args, Some(&r), std::time::Duration::from_secs(20)).unwrap();
+            let out = crate::util::run("git", args, Some(&r), std::time::Duration::from_secs(20))
+                .unwrap();
             assert!(out.ok, "git {args:?}: {}", out.stderr);
             out.stdout
         };
         std::fs::create_dir(&r).unwrap();
         g(&["init", "-q", "-b", "main"]);
-        g(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "one"]);
+        g(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "one",
+        ]);
         let (w1, w2) = (d.path().join("w1"), d.path().join("w2"));
-        g(&["worktree", "add", "-q", &w1.display().to_string(), "-b", "b1"]);
-        g(&["worktree", "add", "-q", &w2.display().to_string(), "-b", "b2"]);
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            &w1.display().to_string(),
+            "-b",
+            "b1",
+        ]);
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            &w2.display().to_string(),
+            "-b",
+            "b2",
+        ]);
         std::fs::remove_dir_all(&w1).unwrap();
         std::fs::remove_dir_all(&w2).unwrap();
-        let Action::Run { program, args, cwd } = action_for(&w1, &r) else { panic!() };
+        let Action::Run { program, args, cwd } = action_for(&w1, &r) else {
+            panic!()
+        };
         assert_eq!(cwd.as_deref(), Some(r.as_path()));
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         assert_eq!(program, "git");
@@ -344,7 +430,11 @@ mod tests {
 
     #[test]
     fn dirty_beats_merged() {
-        let f = WtFacts { dirty: Some(2), pr: pr(PrState::Merged), ..facts() };
+        let f = WtFacts {
+            dirty: Some(2),
+            pr: pr(PrState::Merged),
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Keep);
         assert!(r[0].contains("2 uncommitted"));
@@ -352,47 +442,81 @@ mod tests {
 
     #[test]
     fn merged_pr_is_safe_even_with_squashed_local_commits() {
-        let f = WtFacts { unpushed: Some(5), pr: pr(PrState::Merged), ..facts() };
+        let f = WtFacts {
+            unpushed: Some(5),
+            pr: pr(PrState::Merged),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Safe);
     }
 
     #[test]
     fn merged_pr_touched_today_needs_review() {
-        let f = WtFacts { pr: pr(PrState::Merged), idle_days: Some(0), ..facts() };
+        let f = WtFacts {
+            pr: pr(PrState::Merged),
+            idle_days: Some(0),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Review);
     }
 
     #[test]
     fn fresh_worktree_with_no_commits_is_active_not_safe() {
-        let f = WtFacts { merged_ancestor: true, idle_days: Some(0), ..facts() };
+        let f = WtFacts {
+            merged_ancestor: true,
+            idle_days: Some(0),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Active);
-        let f = WtFacts { merged_ancestor: true, idle_days: Some(5), ..facts() };
+        let f = WtFacts {
+            merged_ancestor: true,
+            idle_days: Some(5),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Safe);
     }
 
     #[test]
     fn running_process_keeps_it_active() {
-        let f = WtFacts { pr: pr(PrState::Merged), running: Some(vec!["node".into()]), ..facts() };
+        let f = WtFacts {
+            pr: pr(PrState::Merged),
+            running: Some(vec!["node".into()]),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Active);
     }
 
     #[test]
     fn unpushed_commits_are_kept() {
-        let f = WtFacts { unpushed: Some(3), idle_days: Some(200), ..facts() };
+        let f = WtFacts {
+            unpushed: Some(3),
+            idle_days: Some(200),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Keep);
     }
 
     #[test]
     fn closed_pr_without_unpushed_is_review() {
-        let f = WtFacts { pr: pr(PrState::Closed), ..facts() };
+        let f = WtFacts {
+            pr: pr(PrState::Closed),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Review);
     }
 
     #[test]
     fn pushed_and_idle_is_review_recent_is_active() {
-        let f = WtFacts { idle_days: Some(45), ..facts() };
+        let f = WtFacts {
+            idle_days: Some(45),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Review);
-        let f = WtFacts { idle_days: Some(4), pr: pr(PrState::Open), ..facts() };
+        let f = WtFacts {
+            idle_days: Some(4),
+            pr: pr(PrState::Open),
+            ..facts()
+        };
         let (v, r) = classify(&f, 30);
         assert_eq!(v, Verdict::Active);
         assert!(r.iter().any(|x| x.contains("PR #7 open")));
@@ -400,7 +524,11 @@ mod tests {
 
     #[test]
     fn locked_is_kept() {
-        let f = WtFacts { locked: true, pr: pr(PrState::Merged), ..facts() };
+        let f = WtFacts {
+            locked: true,
+            pr: pr(PrState::Merged),
+            ..facts()
+        };
         assert_eq!(classify(&f, 30).0, Verdict::Keep);
     }
 }

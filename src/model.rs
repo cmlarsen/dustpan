@@ -161,7 +161,9 @@ impl Action {
                     .collect::<Vec<_>>()
                     .join(" ");
                 let cmd = match cwd {
-                    Some(dir) => format!("cd {} && {}", shell_quote(&dir.display().to_string()), cmd),
+                    Some(dir) => {
+                        format!("cd {} && {}", shell_quote(&dir.display().to_string()), cmd)
+                    }
                     None => cmd,
                 };
                 if program == "git" && args.iter().map(String::as_str).eq(["worktree", "prune"]) {
@@ -265,7 +267,12 @@ impl Item {
         self.effective_verdict()
             .rank()
             .cmp(&other.effective_verdict().rank())
-            .then(other.reclaimable.max(other.bytes / 8).cmp(&self.reclaimable.max(self.bytes / 8)))
+            .then(
+                other
+                    .reclaimable
+                    .max(other.bytes / 8)
+                    .cmp(&self.reclaimable.max(self.bytes / 8)),
+            )
     }
 }
 
@@ -290,7 +297,11 @@ mod tests {
 
     #[test]
     fn describe_run_with_cwd() {
-        let a = Action::run("git", &["worktree", "remove", "/r/x-wt"], Some("/r/x".into()));
+        let a = Action::run(
+            "git",
+            &["worktree", "remove", "/r/x-wt"],
+            Some("/r/x".into()),
+        );
         assert_eq!(a.describe(), "cd /r/x && git worktree remove /r/x-wt");
     }
 
@@ -309,7 +320,10 @@ mod tests {
         item.reasons = vec!["project gone".into()];
         item.set_protected(true);
         item.set_protected(true);
-        assert_eq!(item.reasons, vec![PROTECTED_REASON.to_string(), "project gone".into()]);
+        assert_eq!(
+            item.reasons,
+            vec![PROTECTED_REASON.to_string(), "project gone".into()]
+        );
         item.set_protected(false);
         assert!(!item.protected);
         assert_eq!(item.reasons, vec!["project gone".to_string()]);
@@ -341,12 +355,27 @@ mod tests {
         };
         let mut pinned = mk(Verdict::Safe, 900);
         pinned.protected = true;
-        let mut items = [mk(Verdict::Keep, 500), pinned, mk(Verdict::Review, 10), mk(Verdict::Safe, 1), mk(Verdict::Safe, 50)];
+        let mut items = [
+            mk(Verdict::Keep, 500),
+            pinned,
+            mk(Verdict::Review, 10),
+            mk(Verdict::Safe, 1),
+            mk(Verdict::Safe, 50),
+        ];
         items.sort_by(Item::listing_order);
-        let got: Vec<(Verdict, u64)> = items.iter().map(|i| (i.effective_verdict(), i.bytes)).collect();
+        let got: Vec<(Verdict, u64)> = items
+            .iter()
+            .map(|i| (i.effective_verdict(), i.bytes))
+            .collect();
         assert_eq!(
             got,
-            vec![(Verdict::Safe, 50), (Verdict::Safe, 1), (Verdict::Review, 10), (Verdict::Keep, 900), (Verdict::Keep, 500)]
+            vec![
+                (Verdict::Safe, 50),
+                (Verdict::Safe, 1),
+                (Verdict::Review, 10),
+                (Verdict::Keep, 900),
+                (Verdict::Keep, 500)
+            ]
         );
     }
 

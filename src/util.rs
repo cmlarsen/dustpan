@@ -108,11 +108,10 @@ impl GroupGuard {
         if pgid <= 0 {
             return GroupGuard(None);
         }
-        GroupGuard(
-            CHILD_GROUPS
-                .iter()
-                .position(|slot| slot.compare_exchange(0, pgid, Ordering::SeqCst, Ordering::SeqCst).is_ok()),
-        )
+        GroupGuard(CHILD_GROUPS.iter().position(|slot| {
+            slot.compare_exchange(0, pgid, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        }))
     }
 }
 
@@ -126,7 +125,11 @@ impl Drop for GroupGuard {
 
 #[cfg(test)]
 fn registered_groups() -> Vec<libc::pid_t> {
-    CHILD_GROUPS.iter().map(|slot| slot.load(Ordering::SeqCst)).filter(|&g| g > 0).collect()
+    CHILD_GROUPS
+        .iter()
+        .map(|slot| slot.load(Ordering::SeqCst))
+        .filter(|&g| g > 0)
+        .collect()
 }
 
 extern "C" fn kill_groups_and_exit(_signal: libc::c_int) {
@@ -168,7 +171,11 @@ pub fn run_with(
     let mut cmd = Command::new(program);
     cmd.args(args)
         .envs(env.iter().copied())
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
@@ -277,18 +284,37 @@ mod tests {
     #[test]
     fn run_timeout_kills_grandchildren_holding_stdout() {
         let start = Instant::now();
-        let out = run("sh", &["-c", "sleep 30 & sleep 30"], None, Duration::from_millis(500));
+        let out = run(
+            "sh",
+            &["-c", "sleep 30 & sleep 30"],
+            None,
+            Duration::from_millis(500),
+        );
         assert!(out.is_none());
-        assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
     fn run_returns_when_exited_child_leaves_stdout_held_open() {
         let start = Instant::now();
-        let out = run("sh", &["-c", "sleep 30 & echo hi"], None, Duration::from_millis(500)).unwrap();
+        let out = run(
+            "sh",
+            &["-c", "sleep 30 & echo hi"],
+            None,
+            Duration::from_millis(500),
+        )
+        .unwrap();
         assert!(out.ok);
         assert_eq!(out.stdout.trim(), "hi");
-        assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
@@ -308,10 +334,14 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pid_file = d.path().join("pid");
         let script = format!("echo $$ > '{}'; sleep 1", pid_file.display());
-        let handle = thread::spawn(move || run("sh", &["-c", &script], None, Duration::from_secs(5)));
+        let handle =
+            thread::spawn(move || run("sh", &["-c", &script], None, Duration::from_secs(5)));
         let start = Instant::now();
         let pgid = loop {
-            if let Some(p) = std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse::<i32>().ok()) {
+            if let Some(p) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok())
+            {
                 break p;
             }
             assert!(start.elapsed() < Duration::from_secs(3));
@@ -324,9 +354,25 @@ mod tests {
 
     #[test]
     fn run_with_feeds_stdin_and_env() {
-        let out = run_with("cat", &[], None, &[], Some(b"secret-header"), Duration::from_secs(5)).unwrap();
+        let out = run_with(
+            "cat",
+            &[],
+            None,
+            &[],
+            Some(b"secret-header"),
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(out.stdout, "secret-header");
-        let out = run_with("sh", &["-c", "echo $DP_TEST_VAR"], None, &[("DP_TEST_VAR", "set")], None, Duration::from_secs(5)).unwrap();
+        let out = run_with(
+            "sh",
+            &["-c", "echo $DP_TEST_VAR"],
+            None,
+            &[("DP_TEST_VAR", "set")],
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(out.stdout.trim(), "set");
     }
 }

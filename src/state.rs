@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,7 +103,10 @@ impl State {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return State::default(),
             Err(e) => {
                 return State {
-                    warning: Some(format!("could not read {}: {e}; pins won't be saved this run", path.display())),
+                    warning: Some(format!(
+                        "could not read {}: {e}; pins won't be saved this run",
+                        path.display()
+                    )),
                     read_only: true,
                     ..State::default()
                 };
@@ -115,11 +118,18 @@ impl State {
                 let kept = dir.join(format!("state.json.corrupt-{}", Utc::now().timestamp()));
                 match std::fs::rename(&path, &kept) {
                     Ok(()) => State {
-                        warning: Some(format!("{} was unreadable ({e}); moved it to {} and started fresh", path.display(), kept.display())),
+                        warning: Some(format!(
+                            "{} was unreadable ({e}); moved it to {} and started fresh",
+                            path.display(),
+                            kept.display()
+                        )),
                         ..State::default()
                     },
                     Err(re) => State {
-                        warning: Some(format!("{} is unreadable ({e}) and could not be moved aside ({re}); pins won't be saved this run", path.display())),
+                        warning: Some(format!(
+                            "{} is unreadable ({e}) and could not be moved aside ({re}); pins won't be saved this run",
+                            path.display()
+                        )),
                         read_only: true,
                         ..State::default()
                     },
@@ -134,9 +144,16 @@ impl State {
 
     pub fn save_to(&self, dir: &Path) -> Result<()> {
         if self.read_only {
-            bail!("not saving state: {}", self.warning.as_deref().unwrap_or("it failed to load"));
+            bail!(
+                "not saving state: {}",
+                self.warning.as_deref().unwrap_or("it failed to load")
+            );
         }
-        write_private(dir, "state.json", serde_json::to_string_pretty(self)?.as_bytes())
+        write_private(
+            dir,
+            "state.json",
+            serde_json::to_string_pretty(self)?.as_bytes(),
+        )
     }
 
     pub fn toggle_pin(&mut self, id: &str) -> bool {
@@ -189,17 +206,30 @@ mod tests {
         std::fs::write(&path, b"{\"pins\": [\"keep-me\"").unwrap();
         let mut state = State::load_from(d.path());
         assert!(state.pins.is_empty());
-        assert!(state.warning.as_deref().is_some_and(|w| w.contains("corrupt")));
+        assert!(
+            state
+                .warning
+                .as_deref()
+                .is_some_and(|w| w.contains("corrupt"))
+        );
         let kept: Vec<PathBuf> = std::fs::read_dir(d.path())
             .unwrap()
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("state.json.corrupt-"))
+            .filter(|p| {
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("state.json.corrupt-")
+            })
             .collect();
         assert_eq!(kept.len(), 1);
         state.toggle_pin("new");
         state.save_to(d.path()).unwrap();
-        assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), "{\"pins\": [\"keep-me\"");
+        assert_eq!(
+            std::fs::read_to_string(&kept[0]).unwrap(),
+            "{\"pins\": [\"keep-me\""
+        );
         let reloaded = State::load_from(d.path());
         assert!(reloaded.warning.is_none());
         assert!(reloaded.pins.contains("new"));
@@ -233,7 +263,10 @@ mod tests {
         append_history_in(d.path(), &entry).unwrap();
         let path = d.path().join("history.jsonl");
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -255,9 +288,19 @@ mod tests {
         let state = State::load_from(&dir);
         assert!(state.warning.is_none());
         assert_eq!(state.pins.len(), 1);
-        let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name() != "state.json").collect();
-        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
-        let mode = std::fs::metadata(dir.join("state.json")).unwrap().permissions().mode();
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name() != "state.json")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp files left behind: {leftovers:?}"
+        );
+        let mode = std::fs::metadata(dir.join("state.json"))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
 }

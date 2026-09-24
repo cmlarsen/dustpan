@@ -9,7 +9,9 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn parse_size(s: &str) -> u64 {
     let s = s.trim();
-    let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(s.len());
+    let split = s
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(s.len());
     let (num, unit) = s.split_at(split);
     let n: f64 = num.parse().unwrap_or(0.0);
     let mult = match unit.trim().to_ascii_uppercase().as_str() {
@@ -35,7 +37,9 @@ pub struct Image {
 }
 
 pub fn parse_images(text: &str) -> Vec<Image> {
-    text.lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    text.lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
 }
 
 #[derive(Debug, PartialEq)]
@@ -50,7 +54,13 @@ pub struct ImageGroup {
 impl ImageGroup {
     pub fn name(&self) -> String {
         if self.labels.is_empty() {
-            format!("<none> image {}", self.id.trim_start_matches("sha256:").get(..12).unwrap_or(""))
+            format!(
+                "<none> image {}",
+                self.id
+                    .trim_start_matches("sha256:")
+                    .get(..12)
+                    .unwrap_or("")
+            )
         } else {
             self.labels.join(", ")
         }
@@ -103,7 +113,12 @@ pub fn build_cache_bytes(text: &str) -> Option<(u64, u64)> {
     text.lines()
         .filter_map(|l| serde_json::from_str::<DfRow>(l).ok())
         .find(|r| r.kind == "Build Cache")
-        .map(|r| (parse_size(&r.size), parse_size(r.reclaimable.split(' ').next().unwrap_or(""))))
+        .map(|r| {
+            (
+                parse_size(&r.size),
+                parse_size(r.reclaimable.split(' ').next().unwrap_or("")),
+            )
+        })
 }
 
 pub fn classify_image(in_use: bool) -> (Verdict, Vec<String>) {
@@ -139,16 +154,26 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
     if which("docker").is_none() {
         return;
     }
-    if !run("docker", &["info", "--format", "{{.ServerVersion}}"], None, Duration::from_secs(8))
-        .is_some_and(|o| o.ok)
+    if !run(
+        "docker",
+        &["info", "--format", "{{.ServerVersion}}"],
+        None,
+        Duration::from_secs(8),
+    )
+    .is_some_and(|o| o.ok)
     {
         return;
     }
     let vm_dir = ctx.home.join("Library/Containers/com.docker.docker");
     let used = used_image_ids();
-    let images = run("docker", &["images", "--no-trunc", "--format", "{{json .}}"], None, TIMEOUT)
-        .map(|o| parse_images(&o.stdout))
-        .unwrap_or_default();
+    let images = run(
+        "docker",
+        &["images", "--no-trunc", "--format", "{{json .}}"],
+        None,
+        TIMEOUT,
+    )
+    .map(|o| parse_images(&o.stdout))
+    .unwrap_or_default();
     for img in group_images(images) {
         let mut item = Item::new(Category::Docker, img.name(), &vm_dir);
         item.id = format!("docker_image:{}", img.id);
@@ -156,7 +181,10 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
         item.reclaimable = item.bytes;
         let (verdict, mut reasons) = classify_image(used.contains(&img.id));
         if img.refs.len() > 1 {
-            reasons.push(format!("{} tags point at this image; removing it untags all of them", img.refs.len()));
+            reasons.push(format!(
+                "{} tags point at this image; removing it untags all of them",
+                img.refs.len()
+            ));
         }
         if !img.created_since.is_empty() {
             reasons.push(format!("built {}", img.created_since));
@@ -167,15 +195,21 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
         item.action = Action::run("docker", &img.rmi_args(), None);
         emit(item);
     }
-    if let Some((size, reclaimable)) = run("docker", &["system", "df", "--format", "{{json .}}"], None, TIMEOUT)
-        .and_then(|o| build_cache_bytes(&o.stdout))
+    if let Some((size, reclaimable)) = run(
+        "docker",
+        &["system", "df", "--format", "{{json .}}"],
+        None,
+        TIMEOUT,
+    )
+    .and_then(|o| build_cache_bytes(&o.stdout))
     {
         let mut item = Item::new(Category::Docker, "Docker build cache", &vm_dir);
         item.id = "docker_build_cache".into();
         item.bytes = size;
         item.reclaimable = reclaimable;
         item.verdict = Verdict::Safe;
-        item.reasons = vec!["layer cache from `docker build`; the next build refills what it needs".into()];
+        item.reasons =
+            vec!["layer cache from `docker build`; the next build refills what it needs".into()];
         item.action = Action::run("docker", &["builder", "prune", "-f"], None);
         emit(item);
     }
@@ -213,7 +247,10 @@ mod tests {
         let ids: HashSet<&str> = g.iter().map(|x| x.id.as_str()).collect();
         assert_eq!(ids.len(), 3);
         assert_eq!(g[0].name(), "postgres:16, mirror/postgres:latest");
-        assert_eq!(g[0].rmi_args(), vec!["rmi", "postgres:16", "mirror/postgres:latest"]);
+        assert_eq!(
+            g[0].rmi_args(),
+            vec!["rmi", "postgres:16", "mirror/postgres:latest"]
+        );
         assert_eq!(g[1].rmi_args(), vec!["rmi", "sha256:bbb"]);
         assert_eq!(g[2].name(), "app:<none>");
         assert_eq!(g[2].rmi_args(), vec!["rmi", "sha256:ccc"]);

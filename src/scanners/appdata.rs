@@ -1,6 +1,6 @@
 use super::{Ctx, Emit};
 use crate::model::{Action, Category, Item, Verdict};
-use crate::size::{dir_stats, dir_stats_opts, Opts};
+use crate::size::{Opts, dir_stats, dir_stats_opts};
 use crate::util::{age_days, mtime, newer};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,9 @@ pub fn scan_known(ctx: &Ctx, emit: Emit) {
 
 fn opencode_db(ctx: &Ctx, emit: Emit) {
     let db = ctx.home.join(".local/share/opencode/opencode.db");
-    let Ok(meta) = std::fs::metadata(&db) else { return };
+    let Ok(meta) = std::fs::metadata(&db) else {
+        return;
+    };
     let files: Vec<PathBuf> = ["", "-wal", "-shm"]
         .iter()
         .map(|s| PathBuf::from(format!("{}{s}", db.display())))
@@ -20,7 +22,11 @@ fn opencode_db(ctx: &Ctx, emit: Emit) {
         .collect();
     let written = files.iter().filter_map(|f| mtime(f)).max();
     let mut item = Item::new(Category::AppData, "opencode session database", &db);
-    item.bytes = files.iter().map(|f| dir_stats(f).bytes).sum::<u64>().max(meta.len());
+    item.bytes = files
+        .iter()
+        .map(|f| dir_stats(f).bytes)
+        .sum::<u64>()
+        .max(meta.len());
     item.reclaimable = item.bytes;
     item.last_used = written;
     item.verdict = Verdict::Review;
@@ -35,12 +41,19 @@ fn opencode_db(ctx: &Ctx, emit: Emit) {
 }
 
 fn claude_vm(ctx: &Ctx, emit: Emit) {
-    let dir = ctx.home.join("Library/Application Support/Claude/vm_bundles");
+    let dir = ctx
+        .home
+        .join("Library/Application Support/Claude/vm_bundles");
     if !dir.exists() {
         return;
     }
     let s = dir_stats(&dir);
-    let mut item = Item::sized(Category::AppData, "Claude desktop sandbox VM image", &dir, &s);
+    let mut item = Item::sized(
+        Category::AppData,
+        "Claude desktop sandbox VM image",
+        &dir,
+        &s,
+    );
     item.verdict = Verdict::Review;
     item.reasons = vec![
         "VM image the Claude desktop app uses to run code in a sandbox".into(),
@@ -51,7 +64,9 @@ fn claude_vm(ctx: &Ctx, emit: Emit) {
 }
 
 fn container_models(ctx: &Ctx, emit: Emit) {
-    let Ok(entries) = std::fs::read_dir(ctx.home.join("Library/Containers")) else { return };
+    let Ok(entries) = std::fs::read_dir(ctx.home.join("Library/Containers")) else {
+        return;
+    };
     for e in entries.flatten() {
         let hf = e.path().join("Data/Library/Caches/huggingface");
         if !hf.exists() {
@@ -89,10 +104,14 @@ pub fn catch_all_parents(home: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
-const SKIP_DOTDIRS: &[&str] = &[".Trash", ".cache", ".local", ".git", ".ssh", ".gnupg", ".config"];
+const SKIP_DOTDIRS: &[&str] = &[
+    ".Trash", ".cache", ".local", ".git", ".ssh", ".gnupg", ".config",
+];
 
 fn dotdirs(home: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(home) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(home) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -162,7 +181,11 @@ pub fn scan_catch_all(ctx: &Ctx, covered: &[(PathBuf, u64)], emit: Emit) {
         let is_other = rest + (1 << 30) < bytes;
         let mut item = Item::new(
             Category::AppData,
-            if is_other { format!("{name} (other data)") } else { name.clone() },
+            if is_other {
+                format!("{name} (other data)")
+            } else {
+                name.clone()
+            },
             &path,
         );
         item.bytes = rest;
@@ -174,10 +197,12 @@ pub fn scan_catch_all(ctx: &Ctx, covered: &[(PathBuf, u64)], emit: Emit) {
             ctx.cfg.ai.provider
         )];
         if is_other {
-            item.reasons.push("size excludes items listed separately".into());
+            item.reasons
+                .push("size excludes items listed separately".into());
         }
         if path.starts_with(&caches) && !is_other {
-            item.reasons.push("it lives in ~/Library/Caches, which apps must be able to rebuild".into());
+            item.reasons
+                .push("it lives in ~/Library/Caches, which apps must be able to rebuild".into());
             item.action = Action::delete(&path);
         }
         emit(item);
@@ -191,11 +216,23 @@ mod tests {
     #[test]
     fn uncovered_subtracts_items_inside() {
         let covered = vec![
-            (PathBuf::from("/h/Library/Containers/app/Data/Library/Caches/huggingface"), 24),
-            (PathBuf::from("/h/Library/Containers/app/Data/tmp/CFNetworkDownload_*.tmp"), 15),
+            (
+                PathBuf::from("/h/Library/Containers/app/Data/Library/Caches/huggingface"),
+                24,
+            ),
+            (
+                PathBuf::from("/h/Library/Containers/app/Data/tmp/CFNetworkDownload_*.tmp"),
+                15,
+            ),
             (PathBuf::from("/h/Library/Containers/other/x"), 100),
         ];
-        assert_eq!(uncovered(44, Path::new("/h/Library/Containers/app"), &covered), 5);
-        assert_eq!(uncovered(10, Path::new("/h/Library/Containers/app"), &covered[..0]), 10);
+        assert_eq!(
+            uncovered(44, Path::new("/h/Library/Containers/app"), &covered),
+            5
+        );
+        assert_eq!(
+            uncovered(10, Path::new("/h/Library/Containers/app"), &covered[..0]),
+            10
+        );
     }
 }

@@ -105,7 +105,11 @@ pub fn dir_stats_opts(root: &Path, opts: &Opts) -> DirStats {
     stats.newest = to_time(root_stat.mtime);
     if !meta.is_dir() {
         stats.bytes = root_stat.bytes;
-        stats.exclusive = if root_stat.nlink > 1 { 0 } else { root_stat.bytes };
+        stats.exclusive = if root_stat.nlink > 1 {
+            0
+        } else {
+            root_stat.bytes
+        };
         stats.files = 1;
         return stats;
     }
@@ -129,7 +133,9 @@ pub fn dir_stats_opts(root: &Path, opts: &Opts) -> DirStats {
     let mut links: HashMap<(u64, u64), (u64, u64, u64)> = HashMap::new();
     let mut newest = root_stat.mtime;
     for entry in walk.into_iter().flatten() {
-        let Some(st) = entry.client_state else { continue };
+        let Some(st) = entry.client_state else {
+            continue;
+        };
         if entry.depth == 0 {
             continue;
         }
@@ -149,7 +155,9 @@ pub fn dir_stats_opts(root: &Path, opts: &Opts) -> DirStats {
             stats.exclusive += st.bytes;
             true
         } else {
-            let e = links.entry((st.dev, st.ino)).or_insert((0, st.nlink, st.bytes));
+            let e = links
+                .entry((st.dev, st.ino))
+                .or_insert((0, st.nlink, st.bytes));
             e.0 += 1;
             e.0 == 1
         };
@@ -221,14 +229,18 @@ mod tests {
         fs::write(root.join("node_modules/x"), b"x").unwrap();
 
         let old = std::time::SystemTime::now() - Duration::from_secs(86_400 * 10);
-        for p in ["apps/big/f", "apps/small/f", "apps/big", "apps/small", "apps", ""] {
+        for p in [
+            "apps/big/f",
+            "apps/small/f",
+            "apps/big",
+            "apps/small",
+            "apps",
+            "",
+        ] {
             let f = fs::File::open(root.join(p)).unwrap();
             f.set_modified(old).unwrap();
         }
-        fs::File::open(root)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        fs::File::open(root).unwrap().set_modified(old).unwrap();
 
         let under = root.join("apps");
         let s = dir_stats_opts(
@@ -241,7 +253,10 @@ mod tests {
         assert!(s.breakdown["big"] >= 50_000);
         assert!(s.breakdown["small"] < s.breakdown["big"]);
         let age = (Utc::now() - s.newest.unwrap()).num_days();
-        assert!(age >= 9, "node_modules should not count toward newest, age={age}");
+        assert!(
+            age >= 9,
+            "node_modules should not count toward newest, age={age}"
+        );
     }
 
     #[test]

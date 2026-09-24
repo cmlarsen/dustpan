@@ -1,6 +1,6 @@
 use super::{Ctx, Emit};
 use crate::model::{Action, Category, Item, Verdict};
-use crate::size::{dir_stats_opts, Opts};
+use crate::size::{Opts, dir_stats_opts};
 use crate::util::{age_days, human, run};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -63,7 +63,11 @@ pub fn classify(f: &SimFacts, stale_days: i64) -> (Verdict, Vec<String>, SimActi
         );
     }
     if f.booted {
-        return (Verdict::Active, vec!["booted right now".into()], SimAction::Erase);
+        return (
+            Verdict::Active,
+            vec!["booted right now".into()],
+            SimAction::Erase,
+        );
     }
     if let Some(wt) = &f.worktree {
         return if f.worktree_live {
@@ -95,7 +99,11 @@ pub fn classify(f: &SimFacts, stale_days: i64) -> (Verdict, Vec<String>, SimActi
         d if f.bytes >= HEAVY_BYTES => (
             Verdict::Review,
             vec![
-                format!("holds {} even though it was used {}d ago", human(f.bytes), d.unwrap_or(0)),
+                format!(
+                    "holds {} even though it was used {}d ago",
+                    human(f.bytes),
+                    d.unwrap_or(0)
+                ),
                 "erase wipes its apps and data but keeps the device".into(),
             ],
             SimAction::Erase,
@@ -121,7 +129,10 @@ fn last_used(device_dir: &Path) -> Option<DateTime<Utc>> {
 }
 
 fn app_bundle_id(container: &Path) -> Option<String> {
-    let v = plist::Value::from_file(container.join(".com.apple.mobile_container_manager.metadata.plist")).ok()?;
+    let v = plist::Value::from_file(
+        container.join(".com.apple.mobile_container_manager.metadata.plist"),
+    )
+    .ok()?;
     v.as_dictionary()?
         .get("MCMMetadataIdentifier")?
         .as_string()
@@ -137,7 +148,9 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
     ) else {
         return;
     };
-    let Ok(list) = serde_json::from_str::<SimList>(&out.stdout) else { return };
+    let Ok(list) = serde_json::from_str::<SimList>(&out.stdout) else {
+        return;
+    };
     let live = ctx.live_worktree_names();
     let base = ctx.home.join("Library/Developer/CoreSimulator/Devices");
     let devices: Vec<(String, SimDev)> = list
@@ -211,9 +224,15 @@ mod tests {
 
     #[test]
     fn suffix() {
-        assert_eq!(worktree_suffix("iPhone 17 Pro (wt-feature-x)"), Some("feature-x"));
+        assert_eq!(
+            worktree_suffix("iPhone 17 Pro (wt-feature-x)"),
+            Some("feature-x")
+        );
         assert_eq!(worktree_suffix("iPhone 17 Pro"), None);
-        assert_eq!(worktree_suffix("iPad Pro 13-inch (M5) (wt-noddy--ipad)"), Some("noddy"));
+        assert_eq!(
+            worktree_suffix("iPad Pro 13-inch (M5) (wt-noddy--ipad)"),
+            Some("noddy")
+        );
     }
 
     #[test]
@@ -227,7 +246,11 @@ mod tests {
 
     #[test]
     fn unmatched_worktree_sim_is_review_not_safe() {
-        let f = SimFacts { available: true, worktree: Some("elsewhere".into()), ..Default::default() };
+        let f = SimFacts {
+            available: true,
+            worktree: Some("elsewhere".into()),
+            ..Default::default()
+        };
         let (v, r, a) = classify(&f, 30);
         assert_eq!((v, a), (Verdict::Review, SimAction::Delete));
         assert!(r.iter().any(|x| x.contains("outside the scanned roots")));
@@ -235,23 +258,52 @@ mod tests {
 
     #[test]
     fn rules() {
-        let base = SimFacts { available: true, idle_days: Some(2), ..Default::default() };
+        let base = SimFacts {
+            available: true,
+            idle_days: Some(2),
+            ..Default::default()
+        };
         assert_eq!(classify(&base, 30).0, Verdict::Active);
-        let old = SimFacts { idle_days: Some(60), ..base.clone() };
+        let old = SimFacts {
+            idle_days: Some(60),
+            ..base.clone()
+        };
         let (v, _, a) = classify(&old, 30);
         assert_eq!((v, a), (Verdict::Review, SimAction::Erase));
-        let gone = SimFacts { worktree: Some("x".into()), worktree_live: false, ..base.clone() };
+        let gone = SimFacts {
+            worktree: Some("x".into()),
+            worktree_live: false,
+            ..base.clone()
+        };
         let (v, _, a) = classify(&gone, 30);
         assert_eq!((v, a), (Verdict::Review, SimAction::Delete));
-        let live = SimFacts { worktree: Some("x".into()), worktree_live: true, ..base.clone() };
+        let live = SimFacts {
+            worktree: Some("x".into()),
+            worktree_live: true,
+            ..base.clone()
+        };
         assert_eq!(classify(&live, 30).0, Verdict::Keep);
-        let booted = SimFacts { booted: true, ..old.clone() };
+        let booted = SimFacts {
+            booted: true,
+            ..old.clone()
+        };
         assert_eq!(classify(&booted, 30).0, Verdict::Active);
-        let heavy = SimFacts { bytes: 20 << 30, ..base.clone() };
+        let heavy = SimFacts {
+            bytes: 20 << 30,
+            ..base.clone()
+        };
         assert_eq!(classify(&heavy, 30).0, Verdict::Review);
-        let heavy_live = SimFacts { bytes: 20 << 30, worktree: Some("x".into()), worktree_live: true, ..base.clone() };
+        let heavy_live = SimFacts {
+            bytes: 20 << 30,
+            worktree: Some("x".into()),
+            worktree_live: true,
+            ..base.clone()
+        };
         assert_eq!(classify(&heavy_live, 30).0, Verdict::Keep);
-        let unavailable = SimFacts { available: false, ..base };
+        let unavailable = SimFacts {
+            available: false,
+            ..base
+        };
         assert_eq!(classify(&unavailable, 30).2, SimAction::Delete);
     }
 }

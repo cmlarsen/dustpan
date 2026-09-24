@@ -1,4 +1,4 @@
-use super::{tilde, Ctx, Emit};
+use super::{Ctx, Emit, tilde};
 use crate::model::{Action, Category, Item, Verdict};
 use crate::size::dir_stats;
 use crate::util::age_days;
@@ -48,7 +48,9 @@ fn read_info(dir: &Path) -> (Option<PathBuf>, Option<DateTime<Utc>>) {
     let Ok(v) = plist::Value::from_file(dir.join("info.plist")) else {
         return (None, None);
     };
-    let Some(d) = v.as_dictionary() else { return (None, None) };
+    let Some(d) = v.as_dictionary() else {
+        return (None, None);
+    };
     let ws = d
         .get("WorkspacePath")
         .and_then(|w| w.as_string())
@@ -62,7 +64,9 @@ fn read_info(dir: &Path) -> (Option<PathBuf>, Option<DateTime<Utc>>) {
 
 pub fn scan(ctx: &Ctx, emit: Emit) {
     let root = ctx.home.join("Library/Developer/Xcode/DerivedData");
-    let Ok(entries) = std::fs::read_dir(&root) else { return };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return;
+    };
     let dirs: Vec<PathBuf> = entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -82,7 +86,12 @@ fn build(ctx: &Ctx, dir: &Path) -> Item {
         .unwrap_or_default();
     let stats = dir_stats(dir);
     if SHARED_CACHES.contains(&dirname.as_str()) {
-        let mut item = Item::sized(Category::DerivedData, format!("Xcode {dirname}"), dir, &stats);
+        let mut item = Item::sized(
+            Category::DerivedData,
+            format!("Xcode {dirname}"),
+            dir,
+            &stats,
+        );
         item.verdict = Verdict::Review;
         item.reasons = vec![
             "shared Clang/Swift module cache used by every Xcode project".into(),
@@ -136,7 +145,10 @@ mod tests {
     fn reads_workspace_from_info_plist() {
         let dir = tempfile::tempdir().unwrap();
         let mut dict = plist::Dictionary::new();
-        dict.insert("WorkspacePath".into(), plist::Value::String("/gone/App.xcworkspace".into()));
+        dict.insert(
+            "WorkspacePath".into(),
+            plist::Value::String("/gone/App.xcworkspace".into()),
+        );
         plist::Value::Dictionary(dict)
             .to_file_xml(dir.path().join("info.plist"))
             .unwrap();

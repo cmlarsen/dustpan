@@ -64,20 +64,42 @@ pub fn classify(f: &RtFacts) -> (Verdict, Vec<String>) {
         Some(n) => format!("{n} simulators use it"),
     };
     if !f.deletable {
-        return (Verdict::Keep, vec!["managed by Xcode; simctl won't delete it".into()]);
+        return (
+            Verdict::Keep,
+            vec!["managed by Xcode; simctl won't delete it".into()],
+        );
     }
     if f.beta && f.release_of_same_version {
         return (
             Verdict::Safe,
-            vec![format!("beta build, superseded by the {} {} release", f.platform, f.version), users],
+            vec![
+                format!(
+                    "beta build, superseded by the {} {} release",
+                    f.platform, f.version
+                ),
+                users,
+            ],
         );
     }
     if f.newest_for_platform {
-        return (Verdict::Active, vec![format!("newest {} runtime", f.platform), users]);
+        return (
+            Verdict::Active,
+            vec![format!("newest {} runtime", f.platform), users],
+        );
     }
     match f.devices {
-        Some(0) => return (Verdict::Safe, vec![format!("older {} runtime", f.platform), users]),
-        None => return (Verdict::Review, vec![format!("older {} runtime", f.platform), users]),
+        Some(0) => {
+            return (
+                Verdict::Safe,
+                vec![format!("older {} runtime", f.platform), users],
+            );
+        }
+        None => {
+            return (
+                Verdict::Review,
+                vec![format!("older {} runtime", f.platform), users],
+            );
+        }
         Some(_) => {}
     }
     (
@@ -89,11 +111,16 @@ pub fn classify(f: &RtFacts) -> (Verdict, Vec<String>) {
     )
 }
 
-pub fn facts_for(all: &[Runtime], devices: Option<&HashMap<String, usize>>) -> Vec<(Runtime, RtFacts)> {
+pub fn facts_for(
+    all: &[Runtime],
+    devices: Option<&HashMap<String, usize>>,
+) -> Vec<(Runtime, RtFacts)> {
     let mut newest: HashMap<String, (Vec<u32>, bool)> = HashMap::new();
     for r in all {
         let key = (version_key(&r.version), !is_beta(&r.build));
-        let e = newest.entry(r.platform_identifier.clone()).or_insert(key.clone());
+        let e = newest
+            .entry(r.platform_identifier.clone())
+            .or_insert(key.clone());
         if key > *e {
             *e = key;
         }
@@ -107,7 +134,9 @@ pub fn facts_for(all: &[Runtime], devices: Option<&HashMap<String, usize>>) -> V
                 beta: is_beta(&r.build),
                 newest_for_platform: (version_key(&r.version), !is_beta(&r.build)) == *best,
                 release_of_same_version: all.iter().any(|o| {
-                    o.platform_identifier == r.platform_identifier && o.version == r.version && !is_beta(&o.build)
+                    o.platform_identifier == r.platform_identifier
+                        && o.version == r.version
+                        && !is_beta(&o.build)
                 }),
                 devices: devices.map(|d| {
                     r.runtime_identifier
@@ -128,17 +157,29 @@ fn device_counts() -> Option<HashMap<String, usize>> {
     struct List {
         devices: HashMap<String, Vec<serde_json::Value>>,
     }
-    run("xcrun", &["simctl", "list", "devices", "-j"], None, Duration::from_secs(30))
-        .filter(|o| o.ok)
-        .and_then(|o| serde_json::from_str::<List>(&o.stdout).ok())
-        .map(|l| l.devices.into_iter().map(|(k, v)| (k, v.len())).collect())
+    run(
+        "xcrun",
+        &["simctl", "list", "devices", "-j"],
+        None,
+        Duration::from_secs(30),
+    )
+    .filter(|o| o.ok)
+    .and_then(|o| serde_json::from_str::<List>(&o.stdout).ok())
+    .map(|l| l.devices.into_iter().map(|(k, v)| (k, v.len())).collect())
 }
 
 pub fn scan(ctx: &Ctx, emit: Emit) {
-    let Some(out) = run("xcrun", &["simctl", "runtime", "list", "-j"], None, Duration::from_secs(30)) else {
+    let Some(out) = run(
+        "xcrun",
+        &["simctl", "runtime", "list", "-j"],
+        None,
+        Duration::from_secs(30),
+    ) else {
         return;
     };
-    let Ok(map) = serde_json::from_str::<HashMap<String, Runtime>>(&out.stdout) else { return };
+    let Ok(map) = serde_json::from_str::<HashMap<String, Runtime>>(&out.stdout) else {
+        return;
+    };
     let runtimes: Vec<Runtime> = map.into_values().collect();
     for (rt, facts) in facts_for(&runtimes, device_counts().as_ref()) {
         let path = rt
@@ -159,7 +200,11 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
         reasons.push("re-download it in Xcode → Settings → Components".into());
         item.verdict = verdict;
         item.reasons = reasons;
-        item.action = Action::run("xcrun", &["simctl", "runtime", "delete", &rt.identifier], None);
+        item.action = Action::run(
+            "xcrun",
+            &["simctl", "runtime", "delete", &rt.identifier],
+            None,
+        );
         emit(item);
     }
 }
@@ -193,8 +238,20 @@ mod tests {
     fn classifies_newest_beta_old_and_used() {
         let all = vec![
             rt("new", "iphonesimulator", "26.5", "23F77", "ios-26-5"),
-            rt("beta", "iphonesimulator", "26.5", "23F5043k", "ios-26-5-beta"),
-            rt("old-unused", "iphonesimulator", "18.4", "22E238", "ios-18-4"),
+            rt(
+                "beta",
+                "iphonesimulator",
+                "26.5",
+                "23F5043k",
+                "ios-26-5-beta",
+            ),
+            rt(
+                "old-unused",
+                "iphonesimulator",
+                "18.4",
+                "22E238",
+                "ios-18-4",
+            ),
             rt("old-used", "iphonesimulator", "17.5", "21F79", "ios-17-5"),
             rt("watch", "watchsimulator", "26.5", "23T570", "watch-26-5"),
         ];

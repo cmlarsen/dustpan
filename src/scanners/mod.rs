@@ -86,15 +86,27 @@ pub mod tests {
     }
 
     fn wt(path: PathBuf, branch: &str) -> Worktree {
-        Worktree { path, head: String::new(), branch: Some(branch.into()), prunable: false, locked: false }
+        Worktree {
+            path,
+            head: String::new(),
+            branch: Some(branch.into()),
+            prunable: false,
+            locked: false,
+        }
     }
 
     #[test]
     fn processes_in_is_unknown_when_lsof_failed() {
         let c = ctx(vec![], None);
         assert_eq!(c.processes_in(Path::new("/w")), None);
-        let c = ctx(vec![], Some(vec![(1, "node".into(), PathBuf::from("/w/app"))]));
-        assert_eq!(c.processes_in(Path::new("/w")), Some(vec!["node".to_string()]));
+        let c = ctx(
+            vec![],
+            Some(vec![(1, "node".into(), PathBuf::from("/w/app"))]),
+        );
+        assert_eq!(
+            c.processes_in(Path::new("/w")),
+            Some(vec!["node".to_string()])
+        );
         assert_eq!(c.processes_in(Path::new("/x")), Some(vec![]));
     }
 
@@ -107,7 +119,10 @@ pub mod tests {
                 (2, "caffeinate".into(), PathBuf::from("/w/app")),
             ]),
         );
-        assert_eq!(c.processes_in(Path::new("/w")), Some(vec!["caffeinate".into()]));
+        assert_eq!(
+            c.processes_in(Path::new("/w")),
+            Some(vec!["caffeinate".into()])
+        );
     }
 
     #[test]

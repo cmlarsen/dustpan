@@ -17,7 +17,9 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
 
 fn codex_staging(ctx: &Ctx, emit: Emit) {
     let dir = ctx.home.join(".codex/.tmp/marketplaces/.staging");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
     let stale: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
@@ -28,7 +30,12 @@ fn codex_staging(ctx: &Ctx, emit: Emit) {
     }
     let stats = dir_stats(&dir);
     let oldest = stale.iter().filter_map(|p| mtime(p)).min();
-    let mut item = Item::sized(Category::Leftover, "Codex marketplace upgrade staging", &dir, &stats);
+    let mut item = Item::sized(
+        Category::Leftover,
+        "Codex marketplace upgrade staging",
+        &dir,
+        &stats,
+    );
     item.verdict = Verdict::Safe;
     item.reasons = vec![
         format!(
@@ -83,7 +90,10 @@ fn unfinished_downloads(ctx: &Ctx, emit: Emit) {
         item.last_used = last;
         item.verdict = Verdict::Safe;
         item.reasons = vec![
-            format!("{} interrupted CFNetwork downloads older than a day", files.len()),
+            format!(
+                "{} interrupted CFNetwork downloads older than a day",
+                files.len()
+            ),
             "the app downloads again if it still needs the file".into(),
         ];
         item.action = Action::delete_all(files);
@@ -92,7 +102,9 @@ fn unfinished_downloads(ctx: &Ctx, emit: Emit) {
 }
 
 fn collect_cfnetwork(dir: &Path, now: DateTime<Utc>, push: &mut dyn FnMut(PathBuf)) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let name = e.file_name();
         let name = name.to_string_lossy();
@@ -119,8 +131,18 @@ mod tests {
             std::fs::write(p, b"x").unwrap();
         }
         let two_days = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
-        std::fs::File::options().write(true).open(&old).unwrap().set_modified(two_days).unwrap();
-        std::fs::File::options().write(true).open(&other).unwrap().set_modified(two_days).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(two_days)
+            .unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(two_days)
+            .unwrap();
         let mut got = Vec::new();
         collect_cfnetwork(d.path(), Utc::now(), &mut |p| got.push(p));
         assert_eq!(got, vec![old]);

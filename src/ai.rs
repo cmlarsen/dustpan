@@ -1,8 +1,8 @@
 use crate::config::AiConfig;
 use crate::model::Item;
-use crate::procs::{fmt_uptime, ProcItem};
+use crate::procs::{ProcItem, fmt_uptime};
 use crate::util::{human, run_with, tilde};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::NamedTempFile;
@@ -33,19 +33,31 @@ pub fn item_prompt(item: &Item, home: &Path) -> String {
     if let Some(o) = &item.owner {
         s += &format!("- belongs to: {}\n", tilde(o, home));
     }
-    s += &format!("- Dustpan's rule-based verdict: {}\n", item.effective_verdict().label());
+    s += &format!(
+        "- Dustpan's rule-based verdict: {}\n",
+        item.effective_verdict().label()
+    );
     for r in &item.reasons {
         s += &format!("  - {r}\n");
     }
-    s += &format!("- cleanup action Dustpan would run: {}\n\n", item.action.describe());
+    s += &format!(
+        "- cleanup action Dustpan would run: {}\n\n",
+        item.action.describe()
+    );
     s += ANSWER_FORMAT;
     s
 }
 
 pub fn proc_prompt(p: &ProcItem) -> String {
-    let mut s = format!("{PREAMBLE}\n\nProcess flagged by the Dustpan cleanup tool (it may be using memory for nothing):\n");
+    let mut s = format!(
+        "{PREAMBLE}\n\nProcess flagged by the Dustpan cleanup tool (it may be using memory for nothing):\n"
+    );
     s += &format!("- pid {} · {}\n- executable: {}\n", p.pid, p.name, p.comm);
-    s += &format!("- memory: {} · running {}\n", human(p.rss), fmt_uptime(p.uptime_secs));
+    s += &format!(
+        "- memory: {} · running {}\n",
+        human(p.rss),
+        fmt_uptime(p.uptime_secs)
+    );
     if let Some(c) = &p.cwd {
         s += &format!("- working directory: {}\n", c.display());
     }
@@ -55,7 +67,10 @@ pub fn proc_prompt(p: &ProcItem) -> String {
     for r in &p.reasons {
         s += &format!("  - {r}\n");
     }
-    s += &format!("\nYou can inspect it with `ps -o pid,ppid,etime,command -p {}` and `lsof -p {}`.\n", p.pid, p.pid);
+    s += &format!(
+        "\nYou can inspect it with `ps -o pid,ppid,etime,command -p {}` and `lsof -p {}`.\n",
+        p.pid, p.pid
+    );
     s += &ANSWER_FORMAT.replace("VERDICT: delete", "VERDICT: kill");
     s
 }
@@ -95,8 +110,15 @@ pub fn claude_args(cfg: &AiConfig, prompt: &str, dir: &str) -> Vec<String> {
     }
     args.extend(
         [
-            "--tools", CLAUDE_TOOLS, "--allowedTools", CLAUDE_ALLOWED, "--permission-mode", "dontAsk",
-            "--setting-sources", "", "--strict-mcp-config",
+            "--tools",
+            CLAUDE_TOOLS,
+            "--allowedTools",
+            CLAUDE_ALLOWED,
+            "--permission-mode",
+            "dontAsk",
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
         ]
         .map(String::from),
     );
@@ -105,9 +127,24 @@ pub fn claude_args(cfg: &AiConfig, prompt: &str, dir: &str) -> Vec<String> {
 
 pub fn codex_args(cfg: &AiConfig, prompt: &str, dir: &str, out_file: &str) -> Vec<String> {
     let mut args: Vec<String> = [
-        "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
-        "--disable", "plugins", "--disable", "apps", "--disable", "hooks", "-c", "project_doc_max_bytes=0",
-        "-C", dir, "-o", out_file,
+        "exec",
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--disable",
+        "plugins",
+        "--disable",
+        "apps",
+        "--disable",
+        "hooks",
+        "-c",
+        "project_doc_max_bytes=0",
+        "-C",
+        dir,
+        "-o",
+        out_file,
     ]
     .map(String::from)
     .into();
@@ -115,7 +152,10 @@ pub fn codex_args(cfg: &AiConfig, prompt: &str, dir: &str, out_file: &str) -> Ve
         args.extend(["-m".into(), cfg.codex_model.clone()]);
     }
     if !cfg.effort.is_empty() {
-        args.extend(["-c".into(), format!("model_reasoning_effort=\"{}\"", cfg.effort)]);
+        args.extend([
+            "-c".into(),
+            format!("model_reasoning_effort=\"{}\"", cfg.effort),
+        ]);
     }
     args.push(prompt.into());
     args
@@ -165,7 +205,11 @@ mod tests {
 
     #[test]
     fn prompt_includes_facts_and_format() {
-        let mut item = Item::new(Category::DerivedData, "MyApp · ~/gone", "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc");
+        let mut item = Item::new(
+            Category::DerivedData,
+            "MyApp · ~/gone",
+            "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc",
+        );
         item.bytes = 20 << 30;
         item.reclaimable = 20 << 30;
         item.reasons = vec!["project ~/gone no longer exists".into()];
@@ -199,7 +243,19 @@ Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
         let args = claude_args(&AiConfig::default(), "hi", "/w");
         let pos = |flag: &str| args.iter().position(|a| a == flag).unwrap();
         let allowed = &args[pos("--allowedTools") + 1];
-        for bad in ["sqlite3", "find", "git status", "git log", "git branch", "plutil", "Bash(file", "Edit", "Write", "Bash(git:", "Bash(*"] {
+        for bad in [
+            "sqlite3",
+            "find",
+            "git status",
+            "git log",
+            "git branch",
+            "plutil",
+            "Bash(file",
+            "Edit",
+            "Write",
+            "Bash(git:",
+            "Bash(*",
+        ] {
             assert!(!allowed.contains(bad), "{bad} is allowed");
         }
         assert_eq!(args[pos("--tools") + 1], "Read,Glob,Grep,Bash");
@@ -214,9 +270,29 @@ Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
         let cfg = AiConfig::default();
         let args = codex_args(&cfg, "hi", "/w", "/tmp/out");
         let expected: Vec<String> = [
-            "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
-            "--disable", "plugins", "--disable", "apps", "--disable", "hooks", "-c", "project_doc_max_bytes=0",
-            "-C", "/w", "-o", "/tmp/out", "-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=\"medium\"", "hi",
+            "exec",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--disable",
+            "plugins",
+            "--disable",
+            "apps",
+            "--disable",
+            "hooks",
+            "-c",
+            "project_doc_max_bytes=0",
+            "-C",
+            "/w",
+            "-o",
+            "/tmp/out",
+            "-m",
+            "gpt-5.6-sol",
+            "-c",
+            "model_reasoning_effort=\"medium\"",
+            "hi",
         ]
         .map(String::from)
         .into();
@@ -225,10 +301,23 @@ Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
 
     #[test]
     fn empty_model_and_effort_fall_back_to_cli_defaults() {
-        let cfg = AiConfig { claude_model: String::new(), codex_model: String::new(), effort: String::new(), ..AiConfig::default() };
-        assert!(!claude_args(&cfg, "hi", "/w").iter().any(|a| a == "--model" || a == "--effort"));
+        let cfg = AiConfig {
+            claude_model: String::new(),
+            codex_model: String::new(),
+            effort: String::new(),
+            ..AiConfig::default()
+        };
+        assert!(
+            !claude_args(&cfg, "hi", "/w")
+                .iter()
+                .any(|a| a == "--model" || a == "--effort")
+        );
         let codex = codex_args(&cfg, "hi", "/w", "/o");
-        assert!(!codex.iter().any(|a| a == "-m" || a.starts_with("model_reasoning_effort")));
+        assert!(
+            !codex
+                .iter()
+                .any(|a| a == "-m" || a.starts_with("model_reasoning_effort"))
+        );
         assert!(codex.iter().any(|a| a == "--ignore-user-config"));
     }
 
@@ -253,7 +342,8 @@ Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
         let marker = d.path().join("ran");
         let hook = d.path().join("fsmon.sh");
         std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
-        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let git = |args: &[&str], env: &[(&str, &str)]| {
             let mut all = vec!["-C", repo.to_str().unwrap()];
             all.extend(args);

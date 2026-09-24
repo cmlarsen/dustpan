@@ -1,5 +1,5 @@
 use crate::model::Verdict;
-use crate::util::{run, CmdOut};
+use crate::util::{CmdOut, run};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -160,7 +160,12 @@ pub fn lsof_output(out: Option<&CmdOut>) -> Option<HashMap<u32, Vec<String>>> {
 }
 
 pub fn cwds() -> Option<HashMap<u32, PathBuf>> {
-    let out = run("lsof", &["-nP", "-a", "-d", "cwd", "-Fpn"], None, Duration::from_secs(20));
+    let out = run(
+        "lsof",
+        &["-nP", "-a", "-d", "cwd", "-Fpn"],
+        None,
+        Duration::from_secs(20),
+    );
     let fields = lsof_output(out.as_ref())?;
     if fields.is_empty() {
         return None;
@@ -254,8 +259,10 @@ pub fn dev_kind(comm: &str) -> Option<(DevKind, String)> {
         | "redis-server" | "uvicorn" | "gunicorn" | "vite" => DevKind::Server,
         l if l.starts_with("python") => DevKind::Server,
         "claude" | "codex" | "opencode" | "cursor-agent" | "gemini" | "aider" => DevKind::Agent,
-        "swbbuildservice" | "xcbbuildservice" | "sourcekit-lsp" | "xcodebuild" | "swift-frontend"
-        | "clang" | "rustc" | "cargo" | "rust-analyzer" | "gradle" => DevKind::BuildDaemon,
+        "swbbuildservice" | "xcbbuildservice" | "sourcekit-lsp" | "xcodebuild"
+        | "swift-frontend" | "clang" | "rustc" | "cargo" | "rust-analyzer" | "gradle" => {
+            DevKind::BuildDaemon
+        }
         _ => return None,
     };
     Some((kind, base))
@@ -344,12 +351,22 @@ pub fn parse_vm_stat(text: &str) -> (u64, HashMap<String, u64>) {
 }
 
 pub fn mem_summary() -> MemSummary {
-    let total = run("sysctl", &["-n", "hw.memsize"], None, Duration::from_secs(5))
-        .and_then(|o| o.stdout.trim().parse().ok())
-        .unwrap_or(0);
-    let swap_used = run("sysctl", &["-n", "vm.swapusage"], None, Duration::from_secs(5))
-        .and_then(|o| parse_swap_used(&o.stdout))
-        .unwrap_or(0);
+    let total = run(
+        "sysctl",
+        &["-n", "hw.memsize"],
+        None,
+        Duration::from_secs(5),
+    )
+    .and_then(|o| o.stdout.trim().parse().ok())
+    .unwrap_or(0);
+    let swap_used = run(
+        "sysctl",
+        &["-n", "vm.swapusage"],
+        None,
+        Duration::from_secs(5),
+    )
+    .and_then(|o| parse_swap_used(&o.stdout))
+    .unwrap_or(0);
     let Some(vm) = run("vm_stat", &[], None, Duration::from_secs(5)) else {
         return MemSummary {
             total,
@@ -391,9 +408,15 @@ pub fn snapshot() -> ProcSnapshot {
     let names: HashMap<u32, String> = procs.iter().map(|p| (p.pid, app_name(&p.comm))).collect();
     let mut dev = Vec::new();
     for p in &procs {
-        let Some((kind, name)) = dev_kind(&p.comm) else { continue };
+        let Some((kind, name)) = dev_kind(&p.comm) else {
+            continue;
+        };
         let cwd = cwds.get(&p.pid).cloned();
-        let p_ports = ports.as_ref().and_then(|m| m.get(&p.pid)).cloned().unwrap_or_default();
+        let p_ports = ports
+            .as_ref()
+            .and_then(|m| m.get(&p.pid))
+            .cloned()
+            .unwrap_or_default();
         let (verdict, mut reasons) = classify_proc(&ProcFacts {
             kind,
             cwd: cwd.as_deref(),
@@ -413,7 +436,10 @@ pub fn snapshot() -> ProcSnapshot {
             }
         }
         if let Some(c) = &cwd {
-            reasons.push(format!("cwd {}", crate::util::tilde(c, &crate::util::home())));
+            reasons.push(format!(
+                "cwd {}",
+                crate::util::tilde(c, &crate::util::home())
+            ));
         }
         dev.push(ProcItem {
             pid: p.pid,
@@ -455,7 +481,9 @@ mod tests {
     #[test]
     fn groups_helpers_under_outer_app() {
         assert_eq!(
-            app_name("/Applications/Orca.app/Contents/Frameworks/Orca Helper.app/Contents/MacOS/Orca Helper"),
+            app_name(
+                "/Applications/Orca.app/Contents/Frameworks/Orca Helper.app/Contents/MacOS/Orca Helper"
+            ),
             "Orca.app"
         );
         assert_eq!(app_name("/Users/me/.local/bin/claude"), "claude");
@@ -478,12 +506,22 @@ mod tests {
 
     #[test]
     fn lsof_failure_is_unknown_but_no_matches_is_empty() {
-        let out = |ok: bool, stdout: &str, stderr: &str| CmdOut { ok, stdout: stdout.into(), stderr: stderr.into() };
+        let out = |ok: bool, stdout: &str, stderr: &str| CmdOut {
+            ok,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        };
         assert_eq!(lsof_output(None), None);
         assert_eq!(lsof_output(Some(&out(false, "", "lsof: fatal"))), None);
-        assert_eq!(lsof_output(Some(&out(false, "p1\nn/x\n", "lsof: WARNING"))), None);
+        assert_eq!(
+            lsof_output(Some(&out(false, "p1\nn/x\n", "lsof: WARNING"))),
+            None
+        );
         assert_eq!(lsof_output(Some(&out(false, "", ""))), Some(HashMap::new()));
-        assert_eq!(lsof_output(Some(&out(true, "p1\nn/x\n", ""))).unwrap()[&1], vec!["/x"]);
+        assert_eq!(
+            lsof_output(Some(&out(true, "p1\nn/x\n", ""))).unwrap()[&1],
+            vec!["/x"]
+        );
     }
 
     #[test]
@@ -503,8 +541,14 @@ mod tests {
     #[test]
     fn dev_kinds_skip_app_bundles() {
         assert!(dev_kind("/Applications/ChatGPT.app/Contents/Resources/codex").is_none());
-        assert_eq!(dev_kind("/opt/homebrew/bin/node").unwrap().0, DevKind::Server);
-        assert_eq!(dev_kind("/Users/me/.local/bin/claude").unwrap().0, DevKind::Agent);
+        assert_eq!(
+            dev_kind("/opt/homebrew/bin/node").unwrap().0,
+            DevKind::Server
+        );
+        assert_eq!(
+            dev_kind("/Users/me/.local/bin/claude").unwrap().0,
+            DevKind::Agent
+        );
         assert_eq!(
             dev_kind("/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator").unwrap().0,
             DevKind::Simulator
@@ -524,13 +568,29 @@ mod tests {
             ports: &[],
         };
         assert_eq!(classify_proc(&base).0, Verdict::Safe);
-        let alive = ProcFacts { cwd_deleted: false, ..base };
+        let alive = ProcFacts {
+            cwd_deleted: false,
+            ..base
+        };
         assert_eq!(classify_proc(&alive).0, Verdict::Active);
-        let old = ProcFacts { uptime_secs: 3 * 86_400, cwd_deleted: false, ..alive };
+        let old = ProcFacts {
+            uptime_secs: 3 * 86_400,
+            cwd_deleted: false,
+            ..alive
+        };
         assert_eq!(classify_proc(&old).0, Verdict::Review);
-        let tty = ProcFacts { tty: "ttys001", uptime_secs: 3 * 86_400, cwd_deleted: false, ..alive };
+        let tty = ProcFacts {
+            tty: "ttys001",
+            uptime_secs: 3 * 86_400,
+            cwd_deleted: false,
+            ..alive
+        };
         assert_eq!(classify_proc(&tty).0, Verdict::Active);
-        let agent = ProcFacts { kind: DevKind::Agent, cwd_deleted: false, ..alive };
+        let agent = ProcFacts {
+            kind: DevKind::Agent,
+            cwd_deleted: false,
+            ..alive
+        };
         assert_eq!(classify_proc(&agent).0, Verdict::Review);
     }
 
@@ -546,14 +606,23 @@ mod tests {
             uptime_secs: 10,
             ports: &[],
         };
-        let tty = ProcFacts { tty: "ttys002", ..base };
+        let tty = ProcFacts {
+            tty: "ttys002",
+            ..base
+        };
         let (v, r) = classify_proc(&tty);
         assert_eq!(v, Verdict::Active);
         assert!(r[0].contains("deleted"));
         let ports = [":3000".to_string()];
-        let listening = ProcFacts { ports: &ports, ..base };
+        let listening = ProcFacts {
+            ports: &ports,
+            ..base
+        };
         assert_ne!(classify_proc(&listening).0, Verdict::Safe);
-        let unknown = ProcFacts { ports_known: false, ..base };
+        let unknown = ProcFacts {
+            ports_known: false,
+            ..base
+        };
         let (v, r) = classify_proc(&unknown);
         assert_ne!(v, Verdict::Safe);
         assert!(r.iter().any(|x| x.contains("lsof failed")));

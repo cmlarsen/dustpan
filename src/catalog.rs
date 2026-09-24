@@ -34,7 +34,11 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn models(&self, provider: &str) -> &[ModelOption] {
-        if provider == "codex" { &self.codex } else { &self.claude }
+        if provider == "codex" {
+            &self.codex
+        } else {
+            &self.claude
+        }
     }
 
     pub fn efforts_for(&self, provider: &str, model: &str) -> Vec<String> {
@@ -82,14 +86,20 @@ pub fn parse_codex_catalog(json: &str) -> Vec<ModelOption> {
     struct Root {
         models: Vec<Model>,
     }
-    let Ok(root) = serde_json::from_str::<Root>(json) else { return Vec::new() };
+    let Ok(root) = serde_json::from_str::<Root>(json) else {
+        return Vec::new();
+    };
     root.models
         .into_iter()
         .filter(|m| m.visibility != "hide")
         .map(|m| ModelOption {
             id: m.slug,
             about: m.description,
-            efforts: m.supported_reasoning_levels.into_iter().map(|l| l.effort).collect(),
+            efforts: m
+                .supported_reasoning_levels
+                .into_iter()
+                .map(|l| l.effort)
+                .collect(),
             default_effort: m.default_reasoning_level,
         })
         .collect()
@@ -138,20 +148,41 @@ pub fn parse_anthropic_models(json: &str) -> Vec<ModelOption> {
         data: Vec<M>,
     }
     serde_json::from_str::<Page>(json)
-        .map(|p| p.data.into_iter().map(|m| ModelOption::plain(&m.id, &m.display_name)).collect())
+        .map(|p| {
+            p.data
+                .into_iter()
+                .map(|m| ModelOption::plain(&m.id, &m.display_name))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
-const ANTHROPIC_MODELS_ARGS: &[&str] = &["-sf", "--max-time", "8", "-H", "@-", "https://api.anthropic.com/v1/models?limit=100"];
+const ANTHROPIC_MODELS_ARGS: &[&str] = &[
+    "-sf",
+    "--max-time",
+    "8",
+    "-H",
+    "@-",
+    "https://api.anthropic.com/v1/models?limit=100",
+];
 
 fn anthropic_headers(key: &str) -> String {
     format!("x-api-key: {key}\nanthropic-version: 2023-06-01\n")
 }
 
 fn anthropic_api_models() -> Option<Vec<ModelOption>> {
-    let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty())?;
+    let key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())?;
     let headers = anthropic_headers(&key);
-    let out = run_with("curl", ANTHROPIC_MODELS_ARGS, None, &[], Some(headers.as_bytes()), Duration::from_secs(10))?;
+    let out = run_with(
+        "curl",
+        ANTHROPIC_MODELS_ARGS,
+        None,
+        &[],
+        Some(headers.as_bytes()),
+        Duration::from_secs(10),
+    )?;
     let models = parse_anthropic_models(&out.stdout);
     (!models.is_empty()).then_some(models)
 }
@@ -176,7 +207,9 @@ pub fn fetch() -> Catalog {
                 cat.notes.push("codex returned no models".into());
             }
         }
-        _ => cat.notes.push("codex CLI not found or `codex debug models` failed".into()),
+        _ => cat
+            .notes
+            .push("codex CLI not found or `codex debug models` failed".into()),
     }
 
     let (mut aliases, efforts) = claude_help
@@ -194,7 +227,12 @@ pub fn fetch() -> Catalog {
     cat.claude_efforts = efforts;
     cat.claude = aliases
         .iter()
-        .map(|a| ModelOption::plain(a, &format!("alias: the latest {a} model (can change when a new one ships)")))
+        .map(|a| {
+            ModelOption::plain(
+                a,
+                &format!("alias: the latest {a} model (can change when a new one ships)"),
+            )
+        })
         .collect();
     match api {
         Some(models) => cat.claude.extend(models),
@@ -221,7 +259,10 @@ mod tests {
     #[test]
     fn codex_catalog_skips_hidden_models_and_keeps_efforts() {
         let m = parse_codex_catalog(CODEX);
-        assert_eq!(m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["gpt-6-astra", "gpt-5.5"]);
+        assert_eq!(
+            m.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
+            ["gpt-6-astra", "gpt-5.5"]
+        );
         assert_eq!(m[0].efforts, ["low", "medium", "max"]);
         assert_eq!(m[0].default_effort.as_deref(), Some("low"));
         assert!(parse_codex_catalog("not json").is_empty());
@@ -245,8 +286,15 @@ mod tests {
     fn api_key_goes_to_curl_on_stdin_not_disk_or_argv() {
         let headers = anthropic_headers("sk-test-key");
         assert!(headers.starts_with("x-api-key: sk-test-key\n"));
-        assert!(!ANTHROPIC_MODELS_ARGS.iter().any(|a| a.contains("sk-test-key") || a.starts_with("@/")));
-        let h = ANTHROPIC_MODELS_ARGS.iter().position(|a| *a == "-H").unwrap();
+        assert!(
+            !ANTHROPIC_MODELS_ARGS
+                .iter()
+                .any(|a| a.contains("sk-test-key") || a.starts_with("@/"))
+        );
+        let h = ANTHROPIC_MODELS_ARGS
+            .iter()
+            .position(|a| *a == "-H")
+            .unwrap();
         assert_eq!(ANTHROPIC_MODELS_ARGS[h + 1], "@-");
     }
 
@@ -261,7 +309,10 @@ mod tests {
         assert_eq!(cat.efforts_for("codex", "gpt-5.5"), ["low", "xhigh"]);
         assert_eq!(cat.efforts_for("claude", "opus"), ["low", "max"]);
         assert_eq!(cat.efforts_for("codex", "unknown"), FALLBACK_EFFORTS);
-        assert_eq!(cat.default_effort("codex", "gpt-6-astra").as_deref(), Some("low"));
+        assert_eq!(
+            cat.default_effort("codex", "gpt-6-astra").as_deref(),
+            Some("low")
+        );
     }
 
     #[test]

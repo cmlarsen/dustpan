@@ -1,4 +1,4 @@
-use crate::config::{resolve_roots, Config, Protector};
+use crate::config::{Config, Protector, resolve_roots};
 use crate::git;
 use crate::model::{Category, Item, Verdict};
 use crate::procs;
@@ -8,8 +8,8 @@ use crate::util::home;
 use chrono::Utc;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
+use std::sync::mpsc::{Sender, channel};
 use std::time::Instant;
 
 pub enum ScanMsg {
@@ -44,7 +44,8 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
     let start = Instant::now();
     let home = home();
     let state = State::load();
-    let protector = Protector::new(&cfg.protect, state.pins.clone(), &home).unwrap_or_else(|_| Protector::everything());
+    let protector = Protector::new(&cfg.protect, state.pins.clone(), &home)
+        .unwrap_or_else(|_| Protector::everything());
     let send = |m: ScanMsg| {
         let _ = tx.send(m);
     };
@@ -60,7 +61,9 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
 
-    send(ScanMsg::Progress("reading process working directories".into()));
+    send(ScanMsg::Progress(
+        "reading process working directories".into(),
+    ));
     let cwds = procs::cwds();
     let names: std::collections::HashMap<u32, String> = procs::list()
         .into_iter()
@@ -88,7 +91,10 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
         send(ScanMsg::Progress(format!("scanning {}", list.join(", "))));
     };
     let emit = |mut item: Item| {
-        covered.lock().unwrap().push((item.path.clone(), item.bytes));
+        covered
+            .lock()
+            .unwrap()
+            .push((item.path.clone(), item.bytes));
         if !keep_item(&item, min_bytes) {
             return;
         }

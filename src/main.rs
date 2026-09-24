@@ -24,7 +24,11 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "dp", version, about = "Dustpan: find and clean dev leftovers eating your disk and memory")]
+#[command(
+    name = "dp",
+    version,
+    about = "Dustpan: find and clean dev leftovers eating your disk and memory"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -38,8 +42,7 @@ struct AppMemory<'a> {
 }
 
 fn app_memory(apps: &[(String, u64, usize)]) -> Vec<AppMemory<'_>> {
-    apps
-        .iter()
+    apps.iter()
         .map(|(name, bytes, processes)| AppMemory {
             name,
             bytes: *bytes,
@@ -147,7 +150,12 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Clean { yes, dry_run } => clean_safe(cfg, yes, dry_run),
-        Cmd::Ask { path, provider, model, effort } => {
+        Cmd::Ask {
+            path,
+            provider,
+            model,
+            effort,
+        } => {
             let home = util::home();
             let path = std::fs::canonicalize(&path).unwrap_or(path);
             let mut ai_cfg = cfg.ai.clone();
@@ -177,7 +185,11 @@ fn main() -> Result<()> {
                 report::safe_inline(&util::tilde(&path, &home)),
                 util::human(item.bytes)
             );
-            let answer = ai::ask(&ai_cfg, &ai::item_prompt(&item, &home), &ai::workdir_for(&path, &home))?;
+            let answer = ai::ask(
+                &ai_cfg,
+                &ai::item_prompt(&item, &home),
+                &ai::workdir_for(&path, &home),
+            )?;
             println!("{}", report::safe_multiline(&answer));
             Ok(())
         }
@@ -200,7 +212,11 @@ fn clean_safe(cfg: config::Config, yes: bool, dry_run: bool) -> Result<()> {
         return Ok(());
     }
     let total: u64 = safe.iter().map(|i| i.reclaimable).sum();
-    println!("{} SAFE items, about {} to free:", safe.len(), util::human(total));
+    println!(
+        "{} SAFE items, about {} to free:",
+        safe.len(),
+        util::human(total)
+    );
     for i in &safe {
         println!(
             "  {:>7}  {}\n           $ {}",
@@ -261,7 +277,10 @@ mod tests {
     #[test]
     fn clean_failures_produce_an_error_exit() {
         assert!(clean_result(0).is_ok());
-        assert_eq!(clean_result(3).unwrap_err().to_string(), "3 item(s) failed to clean");
+        assert_eq!(
+            clean_result(3).unwrap_err().to_string(),
+            "3 item(s) failed to clean"
+        );
     }
 
     #[test]
@@ -277,8 +296,16 @@ mod tests {
     fn every_cli_flag_has_help_text() {
         let command = Cli::command();
         for subcommand in command.get_subcommands() {
-            for argument in subcommand.get_arguments().filter(|argument| argument.get_long().is_some()) {
-                assert!(argument.get_help().is_some(), "{} --{} has no help", subcommand.get_name(), argument.get_long().unwrap());
+            for argument in subcommand
+                .get_arguments()
+                .filter(|argument| argument.get_long().is_some())
+            {
+                assert!(
+                    argument.get_help().is_some(),
+                    "{} --{} has no help",
+                    subcommand.get_name(),
+                    argument.get_long().unwrap()
+                );
             }
         }
     }

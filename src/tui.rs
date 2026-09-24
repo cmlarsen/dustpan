@@ -1,10 +1,10 @@
 use crate::actions;
 use crate::ai;
-use crate::config::{resolve_roots, Config, Protector};
-use crate::model::{Category, Item, Verdict};
 use crate::catalog::Catalog;
-use crate::procs::{self, fmt_uptime, ProcItem, ProcSnapshot};
-use crate::report::{disk_info, safe_inline, totals, DiskInfo};
+use crate::config::{Config, Protector, resolve_roots};
+use crate::model::{Category, Item, Verdict};
+use crate::procs::{self, ProcItem, ProcSnapshot, fmt_uptime};
+use crate::report::{DiskInfo, disk_info, safe_inline, totals};
 use crate::scan::{self, ScanMsg};
 use crate::state::{self, AiNote, HistoryEntry, State};
 use crate::util::{ago, home, human, tilde};
@@ -21,7 +21,7 @@ use std::hash::Hash;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -73,7 +73,9 @@ impl<K: Clone + Eq + Hash> ListSel<K> {
     }
 
     fn index(&self, keys: &[K]) -> Option<usize> {
-        self.selected.as_ref().and_then(|selected| keys.iter().position(|key| key == selected))
+        self.selected
+            .as_ref()
+            .and_then(|selected| keys.iter().position(|key| key == selected))
     }
 
     fn move_by(&mut self, keys: &[K], delta: isize) {
@@ -168,7 +170,10 @@ impl Sort {
 enum Modal {
     None,
     Help,
-    ConfirmClean { ids: Vec<String>, skipped: Vec<String> },
+    ConfirmClean {
+        ids: Vec<String>,
+        skipped: Vec<String>,
+    },
     ConfirmKill(Vec<(u32, String)>),
     AiPicker(usize),
 }
@@ -189,7 +194,11 @@ fn with_current(current: &str, presets: &[&str]) -> Vec<String> {
 }
 
 fn current_model(ai: &crate::config::AiConfig) -> &str {
-    if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model }
+    if ai.provider == "codex" {
+        &ai.codex_model
+    } else {
+        &ai.claude_model
+    }
 }
 
 fn model_ids(cat: Option<&Catalog>, provider: &str, current: &str) -> Vec<String> {
@@ -332,9 +341,10 @@ impl App {
             terminal.draw(|f| self.draw(f))?;
             if event::poll(Duration::from_millis(120))?
                 && let Event::Key(k) = event::read()?
-                    && k.kind == KeyEventKind::Press {
-                        self.on_key(k);
-                    }
+                && k.kind == KeyEventKind::Press
+            {
+                self.on_key(k);
+            }
         }
         Ok(())
     }
@@ -379,7 +389,8 @@ impl App {
             Msg::Scan(ScanMsg::Item(item)) => {
                 self.items.push(*item);
                 if self.disk_sel.selected.is_none() {
-                    self.disk_sel.selected = self.visible().first().map(|&i| self.items[i].id.clone());
+                    self.disk_sel.selected =
+                        self.visible().first().map(|&i| self.items[i].id.clone());
                 }
             }
             Msg::Scan(ScanMsg::Progress(p)) => self.scan_progress = p,
@@ -395,7 +406,11 @@ impl App {
                 let live: HashSet<u32> = self.procs.dev.iter().map(|p| p.pid).collect();
                 self.proc_sel.marked.retain(|p| live.contains(p));
             }
-            Msg::Ai { key, provider, result } => {
+            Msg::Ai {
+                key,
+                provider,
+                result,
+            } => {
                 self.pending_ai.remove(&key);
                 match result {
                     Ok(text) => {
@@ -413,7 +428,12 @@ impl App {
                     Err(e) => self.status = format!("AI failed: {e}"),
                 }
             }
-            Msg::Cleaned { id, outcome, msg, freed } => {
+            Msg::Cleaned {
+                id,
+                outcome,
+                msg,
+                freed,
+            } => {
                 self.cleaning.remove(&id);
                 self.disk_sel.marked.remove(&id);
                 match outcome {
@@ -451,7 +471,11 @@ impl App {
                 self.catalog_loading = false;
             }
             Msg::Killed { ok, msg } => {
-                self.status = if ok { msg } else { format!("kill failed: {msg}") };
+                self.status = if ok {
+                    msg
+                } else {
+                    format!("kill failed: {msg}")
+                };
                 self.history = state::read_history(200);
                 self.refresh_procs();
             }
@@ -475,7 +499,12 @@ impl App {
             Sort::Verdict => v.sort_by(|&a, &b| items[a].listing_order(&items[b])),
             Sort::Size => v.sort_by(|&a, &b| items[b].bytes.cmp(&items[a].bytes)),
             Sort::Age => v.sort_by(|&a, &b| items[a].last_used.cmp(&items[b].last_used)),
-            Sort::Name => v.sort_by(|&a, &b| items[a].name.to_lowercase().cmp(&items[b].name.to_lowercase())),
+            Sort::Name => v.sort_by(|&a, &b| {
+                items[a]
+                    .name
+                    .to_lowercase()
+                    .cmp(&items[b].name.to_lowercase())
+            }),
         }
         v
     }
@@ -490,7 +519,9 @@ impl App {
 
     fn selected_item(&self) -> Option<&Item> {
         let vis = self.visible();
-        let pos = self.selected_index(&vis).or(if vis.is_empty() { None } else { Some(0) })?;
+        let pos = self
+            .selected_index(&vis)
+            .or(if vis.is_empty() { None } else { Some(0) })?;
         vis.get(pos).map(|&i| &self.items[i])
     }
 
@@ -511,7 +542,8 @@ impl App {
 
     fn selected_proc(&self) -> Option<&ProcItem> {
         let list = &self.procs.dev;
-        self.proc_sel.selected
+        self.proc_sel
+            .selected
             .and_then(|p| list.iter().find(|x| x.pid == p))
             .or_else(|| list.first())
     }
@@ -571,7 +603,9 @@ impl App {
             }
             KeyCode::Char('?') => self.modal = Modal::Help,
             KeyCode::Char('A') => self.open_picker(),
-            KeyCode::Down | KeyCode::Up if shift => self.mark_and_move(if k.code == KeyCode::Down { 1 } else { -1 }),
+            KeyCode::Down | KeyCode::Up if shift => {
+                self.mark_and_move(if k.code == KeyCode::Down { 1 } else { -1 })
+            }
             KeyCode::Char('J') => self.mark_and_move(1),
             KeyCode::Char('K') => self.mark_and_move(-1),
             KeyCode::Tab => {
@@ -648,7 +682,9 @@ impl App {
             }
             KeyCode::Char('d') => {
                 let ids: Vec<String> = if self.disk_sel.marked.is_empty() {
-                    self.selected_item().map(|i| vec![i.id.clone()]).unwrap_or_default()
+                    self.selected_item()
+                        .map(|i| vec![i.id.clone()])
+                        .unwrap_or_default()
                 } else {
                     self.disk_sel.marked.iter().cloned().collect()
                 };
@@ -660,16 +696,26 @@ impl App {
                     .collect();
                 let ok: Vec<String> = ids
                     .into_iter()
-                    .filter(|id| self.items.iter().any(|i| &i.id == id && i.cleanable() && !self.cleaning.contains(id)))
+                    .filter(|id| {
+                        self.items
+                            .iter()
+                            .any(|i| &i.id == id && i.cleanable() && !self.cleaning.contains(id))
+                    })
                     .collect();
                 if ok.is_empty() {
                     self.status = if blocked.is_empty() {
                         "nothing to clean".into()
                     } else {
-                        format!("can't clean {} (KEEP, pinned, or no action)", blocked.join(", "))
+                        format!(
+                            "can't clean {} (KEEP, pinned, or no action)",
+                            blocked.join(", ")
+                        )
                     };
                 } else {
-                    self.modal = Modal::ConfirmClean { ids: ok, skipped: blocked };
+                    self.modal = Modal::ConfirmClean {
+                        ids: ok,
+                        skipped: blocked,
+                    };
                 }
             }
             KeyCode::Char('x') => {
@@ -699,7 +745,11 @@ impl App {
             KeyCode::Char('y') => {
                 if let Some(i) = self.selected_item() {
                     let path = i.path.display().to_string();
-                    self.status = if copy(&path) { format!("copied {path}") } else { "pbcopy failed".into() };
+                    self.status = if copy(&path) {
+                        format!("copied {path}")
+                    } else {
+                        "pbcopy failed".into()
+                    };
                 }
             }
             KeyCode::Char('f') => self.filter = self.filter.next(),
@@ -739,18 +789,27 @@ impl App {
     }
 
     fn range_ids(&self) -> Vec<String> {
-        let Some(anchor) = &self.disk_sel.anchor else { return Vec::new() };
+        let Some(anchor) = &self.disk_sel.anchor else {
+            return Vec::new();
+        };
         let vis = self.visible();
-        let Some(a) = vis.iter().position(|&i| &self.items[i].id == anchor) else { return Vec::new() };
+        let Some(a) = vis.iter().position(|&i| &self.items[i].id == anchor) else {
+            return Vec::new();
+        };
         let b = self.selected_index(&vis).unwrap_or(0);
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-        vis[lo..=hi].iter().map(|&i| self.items[i].id.clone()).collect()
+        vis[lo..=hi]
+            .iter()
+            .map(|&i| self.items[i].id.clone())
+            .collect()
     }
 
     fn toggle_range(&mut self) {
         if self.disk_sel.anchor.is_none() {
             self.disk_sel.anchor = self.selected_item().map(|i| i.id.clone());
-            self.status = "range started: move, then v or space marks every row in between (esc cancels)".into();
+            self.status =
+                "range started: move, then v or space marks every row in between (esc cancels)"
+                    .into();
             return;
         }
         let ids = self.range_ids();
@@ -789,7 +848,11 @@ impl App {
         match row {
             0 => ai.provider = cycle(&with_current("", AGENTS), &ai.provider, dir),
             1 => {
-                let origin = if ai.provider == "codex" { &self.picker_origin.1 } else { &self.picker_origin.0 };
+                let origin = if ai.provider == "codex" {
+                    &self.picker_origin.1
+                } else {
+                    &self.picker_origin.0
+                };
                 let ids = model_ids(self.catalog.as_ref(), &ai.provider, origin);
                 let next = cycle(&ids, current_model(ai), dir);
                 if ai.provider == "codex" {
@@ -823,7 +886,10 @@ impl App {
 
     fn open_picker(&mut self) {
         self.modal = Modal::AiPicker(0);
-        self.picker_origin = (self.cfg.ai.claude_model.clone(), self.cfg.ai.codex_model.clone());
+        self.picker_origin = (
+            self.cfg.ai.claude_model.clone(),
+            self.cfg.ai.codex_model.clone(),
+        );
         if self.catalog.is_none() && !self.catalog_loading {
             self.catalog_loading = true;
             let tx = self.tx.clone();
@@ -835,16 +901,32 @@ impl App {
 
     fn ai_label(&self) -> String {
         let ai = &self.cfg.ai;
-        let model = if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model };
-        let model = if model.is_empty() { "default model" } else { model.as_str() };
-        let effort = if ai.effort.is_empty() { "default effort" } else { ai.effort.as_str() };
+        let model = if ai.provider == "codex" {
+            &ai.codex_model
+        } else {
+            &ai.claude_model
+        };
+        let model = if model.is_empty() {
+            "default model"
+        } else {
+            model.as_str()
+        };
+        let effort = if ai.effort.is_empty() {
+            "default effort"
+        } else {
+            ai.effort.as_str()
+        };
         format!("{} {model} · {effort}", ai.provider)
     }
 
     fn draw_ai_picker(&self, f: &mut Frame, row: usize) {
         let ai = &self.cfg.ai;
         let model = current_model(ai);
-        let rows = [("agent", ai.provider.as_str()), ("model", model), ("effort", ai.effort.as_str())];
+        let rows = [
+            ("agent", ai.provider.as_str()),
+            ("model", model),
+            ("effort", ai.effort.as_str()),
+        ];
         let mut lines = vec![
             Line::from("Who answers when you press x on an item or process."),
             Line::from(""),
@@ -853,11 +935,18 @@ impl App {
         for (i, (label, value)) in rows.iter().enumerate() {
             let selected = i == row;
             let style = if selected {
-                Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::new()
             };
-            let value = if value.is_empty() { "(CLI default)" } else { value };
+            let value = if value.is_empty() {
+                "(CLI default)"
+            } else {
+                value
+            };
             lines.push(Line::from(vec![
                 Span::raw(if selected { " ▸ " } else { "   " }),
                 Span::styled(format!("{label:<8}"), Style::new().fg(Color::DarkGray)),
@@ -867,16 +956,25 @@ impl App {
         lines.push(Line::from(""));
         match &self.catalog {
             None => lines.push(Line::from(Span::styled(
-                format!("{} asking claude and codex for their models…", SPINNER[self.tick % SPINNER.len()]),
+                format!(
+                    "{} asking claude and codex for their models…",
+                    SPINNER[self.tick % SPINNER.len()]
+                ),
                 Style::new().fg(Color::Cyan),
             ))),
             Some(cat) => {
                 let listed = cat.models(&ai.provider);
                 match listed.iter().find(|m| m.id == model) {
-                    Some(m) if !m.about.is_empty() => lines.push(Line::from(Span::styled(safe_inline(&m.about), dim))),
+                    Some(m) if !m.about.is_empty() => {
+                        lines.push(Line::from(Span::styled(safe_inline(&m.about), dim)))
+                    }
                     Some(_) => {}
                     None => lines.push(Line::from(Span::styled(
-                        format!("{} is from your config; {} doesn't list it", safe_inline(model), safe_inline(&ai.provider)),
+                        format!(
+                            "{} is from your config; {} doesn't list it",
+                            safe_inline(model),
+                            safe_inline(&ai.provider)
+                        ),
                         Style::new().fg(Color::Yellow),
                     ))),
                 }
@@ -889,7 +987,10 @@ impl App {
                     dim,
                 )));
                 for n in &cat.notes {
-                    lines.push(Line::from(Span::styled(format!("note: {}", safe_inline(n)), dim)));
+                    lines.push(Line::from(Span::styled(
+                        format!("note: {}", safe_inline(n)),
+                        dim,
+                    )));
                 }
             }
         }
@@ -918,7 +1019,9 @@ impl App {
             }
             KeyCode::Char('d') => {
                 let pids: Vec<(u32, String)> = if self.proc_sel.marked.is_empty() {
-                    self.selected_proc().map(|p| vec![(p.pid, p.name.clone())]).unwrap_or_default()
+                    self.selected_proc()
+                        .map(|p| vec![(p.pid, p.name.clone())])
+                        .unwrap_or_default()
                 } else {
                     self.procs
                         .dev
@@ -936,7 +1039,11 @@ impl App {
                     let key = p.id();
                     if self.pending_ai.insert(key.clone()) {
                         let prompt = ai::proc_prompt(&p);
-                        let dir = p.cwd.clone().filter(|c| c.is_dir()).unwrap_or_else(|| self.home.clone());
+                        let dir = p
+                            .cwd
+                            .clone()
+                            .filter(|c| c.is_dir())
+                            .unwrap_or_else(|| self.home.clone());
                         self.spawn_ai(key, prompt, dir, &p.name);
                     }
                 }
@@ -961,17 +1068,27 @@ impl App {
         std::thread::spawn(move || {
             let provider = cfg.provider.clone();
             let result = ai::ask(&cfg, &prompt, &dir).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Msg::Ai { key, provider, result });
+            let _ = tx.send(Msg::Ai {
+                key,
+                provider,
+                result,
+            });
         });
     }
 
     fn toggle_pin(&mut self) {
-        let Some(id) = self.selected_item().map(|i| i.id.clone()) else { return };
+        let Some(id) = self.selected_item().map(|i| i.id.clone()) else {
+            return;
+        };
         let pinned = self.state.toggle_pin(&id);
         if let Ok(mut pins) = self.pins.lock() {
             *pins = self.state.pins.clone();
         }
-        let save_error = if self.persist { self.state.save().err() } else { None };
+        let save_error = if self.persist {
+            self.state.save().err()
+        } else {
+            None
+        };
         let protector = self.protector();
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             let protected = protector.is_protected(item);
@@ -980,7 +1097,10 @@ impl App {
                 Some(e) => format!("pin changed for this run, but could not save it: {e:#}"),
                 None => match (pinned, item.protected) {
                     (true, _) => format!("pinned {}: Dustpan will never clean it", item.name),
-                    (false, true) => format!("unpinned {}, but a protect glob in the config still covers it", item.name),
+                    (false, true) => format!(
+                        "unpinned {}, but a protect glob in the config still covers it",
+                        item.name
+                    ),
                     (false, false) => format!("unpinned {}", item.name),
                 },
             };
@@ -989,7 +1109,8 @@ impl App {
     }
 
     fn protector(&self) -> Protector {
-        Protector::new(&self.cfg.protect, self.state.pins.clone(), &self.home).unwrap_or_else(|_| Protector::everything())
+        Protector::new(&self.cfg.protect, self.state.pins.clone(), &self.home)
+            .unwrap_or_else(|_| Protector::everything())
     }
 
     fn currently_pinned(pins: &Arc<Mutex<BTreeSet<String>>>, id: &str) -> bool {
@@ -1014,7 +1135,11 @@ impl App {
         let result = actions::clean(&item, home, roots, protector);
         Msg::Cleaned {
             id: item.id,
-            outcome: if result.is_ok() { CleanOutcome::Success } else { CleanOutcome::Failure },
+            outcome: if result.is_ok() {
+                CleanOutcome::Success
+            } else {
+                CleanOutcome::Failure
+            },
             msg: match result {
                 Ok(message) => format!("{}: {message}", item.name),
                 Err(error) => format!("{}: {error:#}", item.name),
@@ -1057,7 +1182,9 @@ impl App {
         for (pid, name) in &pids {
             match self.procs.dev.iter().find(|p| p.pid == *pid) {
                 Some(p) => targets.push(actions::KillTarget::from_proc(p, self.procs_at)),
-                None => failures.push(format!("{name} (pid {pid}) is no longer listed; refresh and try again")),
+                None => failures.push(format!(
+                    "{name} (pid {pid}) is no longer listed; refresh and try again"
+                )),
             }
         }
         std::thread::spawn(move || {
@@ -1094,9 +1221,12 @@ impl App {
             Tab::History => 2,
         };
         f.render_widget(
-            Tabs::new(titles)
-                .select(idx)
-                .highlight_style(Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Tabs::new(titles).select(idx).highlight_style(
+                Style::new()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             tabs,
         );
         match self.tab {
@@ -1115,7 +1245,13 @@ impl App {
     }
 
     fn draw_header(&self, f: &mut Frame, area: Rect) {
-        let mut l1 = vec![Span::styled(" Dustpan ", Style::new().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD))];
+        let mut l1 = vec![Span::styled(
+            " Dustpan ",
+            Style::new()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )];
         if let Some(d) = &self.disk {
             let used = d.total - d.free;
             let pct = used as f64 / d.total.max(1) as f64 * 100.0;
@@ -1141,9 +1277,17 @@ impl App {
         }
         let t = totals(&self.items);
         let mut l2 = vec![Span::raw(" ")];
-        for v in [Verdict::Safe, Verdict::Review, Verdict::Active, Verdict::Keep] {
+        for v in [
+            Verdict::Safe,
+            Verdict::Review,
+            Verdict::Active,
+            Verdict::Keep,
+        ] {
             let (b, n) = t.get(&v).copied().unwrap_or((0, 0));
-            l2.push(Span::styled(format!("{} ", v.label()), verdict_style(v).add_modifier(Modifier::BOLD)));
+            l2.push(Span::styled(
+                format!("{} ", v.label()),
+                verdict_style(v).add_modifier(Modifier::BOLD),
+            ));
             l2.push(Span::raw(format!("{} ({n})   ", human(b))));
         }
         if self.scanning {
@@ -1157,7 +1301,10 @@ impl App {
                 Style::new().fg(Color::Cyan),
             ));
         } else if let Some(s) = self.scan_secs {
-            l2.push(Span::styled(format!("scanned in {s:.0}s"), Style::new().fg(Color::DarkGray)));
+            l2.push(Span::styled(
+                format!("scanned in {s:.0}s"),
+                Style::new().fg(Color::DarkGray),
+            ));
         }
         if let (Some(start), Some(d)) = (self.free_at_start, &self.disk)
             && d.free > start + (100 << 20)
@@ -1178,7 +1325,9 @@ impl App {
 
     fn draw_disk(&mut self, f: &mut Frame, area: Rect) {
         let (list_area, detail_area) = if area.width >= 140 {
-            let [a, b] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+            let [a, b] =
+                Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(area);
             (a, b)
         } else {
             let [a, b] = Layout::vertical([Constraint::Min(6), Constraint::Length(14)]).areas(area);
@@ -1217,7 +1366,8 @@ impl App {
                 }
                 Row::new(vec![
                     Cell::from(mark).style(Style::new().fg(Color::Yellow)),
-                    Cell::from(if it.protected { "PINNED" } else { v.label() }).style(verdict_style(v)),
+                    Cell::from(if it.protected { "PINNED" } else { v.label() })
+                        .style(verdict_style(v)),
                     Cell::from(human(it.bytes)),
                     Cell::from(human(it.reclaimable)).style(Style::new().fg(Color::DarkGray)),
                     Cell::from(ago(it.last_used, now)),
@@ -1246,7 +1396,11 @@ impl App {
                 .filter(|i| self.disk_sel.marked.contains(&i.id))
                 .map(|i| i.reclaimable)
                 .sum();
-            title += &format!(" · {} marked ({})", self.disk_sel.marked.len(), human(bytes));
+            title += &format!(
+                " · {} marked ({})",
+                self.disk_sel.marked.len(),
+                human(bytes)
+            );
         }
         title.push(' ');
         let table = Table::new(
@@ -1265,9 +1419,18 @@ impl App {
             Row::new(["", "STATE", "SIZE", "FREES", "AGE", "KIND", "NAME"])
                 .style(Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
         )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 50, 70)).add_modifier(Modifier::BOLD))
+        .row_highlight_style(
+            Style::new()
+                .bg(Color::Rgb(50, 50, 70))
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::bordered().title(title));
-        self.disk_sel.table.select(self.selected_index(&vis).or(if vis.is_empty() { None } else { Some(0) }));
+        self.disk_sel
+            .table
+            .select(
+                self.selected_index(&vis)
+                    .or(if vis.is_empty() { None } else { Some(0) }),
+            );
         f.render_stateful_widget(table, list_area, &mut self.disk_sel.table);
 
         let detail = match self.selected_item() {
@@ -1288,11 +1451,20 @@ impl App {
         let dim = Style::new().fg(Color::DarkGray);
         let v = item.effective_verdict();
         let mut lines = vec![
-            Line::from(Span::styled(safe_inline(&item.name), Style::new().add_modifier(Modifier::BOLD))),
-            Line::from(Span::styled(safe_inline(&tilde(&item.path, &self.home)), dim)),
+            Line::from(Span::styled(
+                safe_inline(&item.name),
+                Style::new().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                safe_inline(&tilde(&item.path, &self.home)),
+                dim,
+            )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(if item.protected { "PINNED" } else { v.label() }, verdict_style(v).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    if item.protected { "PINNED" } else { v.label() },
+                    verdict_style(v).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(
                     "   {} on disk · frees {} · last activity {}",
                     human(item.bytes),
@@ -1307,12 +1479,18 @@ impl App {
             lines.push(Line::from(format!("  • {}", safe_inline(r))));
         }
         if let Some(o) = &item.owner {
-            lines.push(Line::from(Span::styled(format!("  belongs to {}", safe_inline(&tilde(o, &self.home))), dim)));
+            lines.push(Line::from(Span::styled(
+                format!("  belongs to {}", safe_inline(&tilde(o, &self.home))),
+                dim,
+            )));
         }
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("clean: ", Style::new().add_modifier(Modifier::BOLD)),
-            Span::styled(safe_inline(&item.action.describe()), Style::new().fg(Color::Cyan)),
+            Span::styled(
+                safe_inline(&item.action.describe()),
+                Style::new().fg(Color::Cyan),
+            ),
         ]));
         lines.push(Line::from(""));
         self.push_ai(&mut lines, &item.id);
@@ -1323,12 +1501,20 @@ impl App {
         let now = Utc::now();
         if self.pending_ai.contains(key) {
             lines.push(Line::from(Span::styled(
-                format!("{} asking {}…", SPINNER[self.tick % SPINNER.len()], safe_inline(&self.cfg.ai.provider)),
+                format!(
+                    "{} asking {}…",
+                    SPINNER[self.tick % SPINNER.len()],
+                    safe_inline(&self.cfg.ai.provider)
+                ),
                 Style::new().fg(Color::Magenta),
             )));
         } else if let Some(note) = self.state.ai_notes.get(key) {
             lines.push(Line::from(Span::styled(
-                format!("✦ {} · {} ago", safe_inline(&note.provider), ago(Some(note.at), now)),
+                format!(
+                    "✦ {} · {} ago",
+                    safe_inline(&note.provider),
+                    ago(Some(note.at), now)
+                ),
                 Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
             )));
             for l in note.text.lines() {
@@ -1341,15 +1527,20 @@ impl App {
             }
         } else {
             lines.push(Line::from(Span::styled(
-                format!("press x to ask {} about this (A to change)", safe_inline(&self.ai_label())),
+                format!(
+                    "press x to ask {} about this (A to change)",
+                    safe_inline(&self.ai_label())
+                ),
                 Style::new().fg(Color::DarkGray),
             )));
         }
     }
 
     fn draw_procs(&mut self, f: &mut Frame, area: Rect) {
-        let [top, detail_area] = Layout::vertical([Constraint::Min(6), Constraint::Length(11)]).areas(area);
-        let [list_area, apps_area] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(42)]).areas(top);
+        let [top, detail_area] =
+            Layout::vertical([Constraint::Min(6), Constraint::Length(11)]).areas(area);
+        let [list_area, apps_area] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(42)]).areas(top);
         let list = &self.procs.dev;
         let rows: Vec<Row> = list
             .iter()
@@ -1361,14 +1552,21 @@ impl App {
                     name.push_str("  ✦");
                 }
                 Row::new(vec![
-                    Cell::from(if self.proc_sel.marked.contains(&p.pid) { "●" } else { " " }).style(Style::new().fg(Color::Yellow)),
+                    Cell::from(if self.proc_sel.marked.contains(&p.pid) {
+                        "●"
+                    } else {
+                        " "
+                    })
+                    .style(Style::new().fg(Color::Yellow)),
                     Cell::from(p.verdict.label()).style(verdict_style(p.verdict)),
                     Cell::from(human(p.rss)),
                     Cell::from(fmt_uptime(p.uptime_secs)),
                     Cell::from(p.pid.to_string()),
                     Cell::from(name),
-                    Cell::from(safe_inline(p.reasons.first().map(String::as_str).unwrap_or_default()))
-                        .style(Style::new().fg(Color::DarkGray)),
+                    Cell::from(safe_inline(
+                        p.reasons.first().map(String::as_str).unwrap_or_default(),
+                    ))
+                    .style(Style::new().fg(Color::DarkGray)),
                 ])
             })
             .collect();
@@ -1393,10 +1591,19 @@ impl App {
             Row::new(["", "STATE", "RSS", "UP", "PID", "NAME", "WHY"])
                 .style(Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
         )
-        .row_highlight_style(Style::new().bg(Color::Rgb(50, 50, 70)).add_modifier(Modifier::BOLD))
+        .row_highlight_style(
+            Style::new()
+                .bg(Color::Rgb(50, 50, 70))
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::bordered().title(title));
-        let pos = self.proc_sel.selected.and_then(|p| list.iter().position(|x| x.pid == p));
-        self.proc_sel.table.select(pos.or(if list.is_empty() { None } else { Some(0) }));
+        let pos = self
+            .proc_sel
+            .selected
+            .and_then(|p| list.iter().position(|x| x.pid == p));
+        self.proc_sel
+            .table
+            .select(pos.or(if list.is_empty() { None } else { Some(0) }));
         f.render_stateful_widget(table, list_area, &mut self.proc_sel.table);
 
         let m = &self.procs.mem;
@@ -1408,7 +1615,12 @@ impl App {
             )),
             Line::from(""),
         ];
-        for (name, bytes, n) in self.procs.apps.iter().take(apps_area.height.saturating_sub(5) as usize) {
+        for (name, bytes, n) in self
+            .procs
+            .apps
+            .iter()
+            .take(apps_area.height.saturating_sub(5) as usize)
+        {
             let label = if *n > 1 {
                 format!("{} ×{n}", safe_inline(name))
             } else {
@@ -1424,10 +1636,19 @@ impl App {
         let mut lines = Vec::new();
         if let Some(p) = self.selected_proc() {
             lines.push(Line::from(Span::styled(
-                format!("{} · pid {} · {} · up {}", safe_inline(&p.name), p.pid, human(p.rss), fmt_uptime(p.uptime_secs)),
+                format!(
+                    "{} · pid {} · {} · up {}",
+                    safe_inline(&p.name),
+                    p.pid,
+                    human(p.rss),
+                    fmt_uptime(p.uptime_secs)
+                ),
                 Style::new().add_modifier(Modifier::BOLD),
             )));
-            lines.push(Line::from(Span::styled(safe_inline(&p.comm), Style::new().fg(Color::DarkGray))));
+            lines.push(Line::from(Span::styled(
+                safe_inline(&p.comm),
+                Style::new().fg(Color::DarkGray),
+            )));
             for r in &p.reasons {
                 lines.push(Line::from(format!("  • {}", safe_inline(r))));
             }
@@ -1449,13 +1670,21 @@ impl App {
             .iter()
             .map(|h| {
                 Row::new(vec![
-                    Cell::from(h.at.with_timezone(&chrono::Local).format("%b %-d %H:%M").to_string()),
+                    Cell::from(
+                        h.at.with_timezone(&chrono::Local)
+                            .format("%b %-d %H:%M")
+                            .to_string(),
+                    ),
                     Cell::from(if h.ok { "ok" } else { "FAIL" }).style(if h.ok {
                         Style::new().fg(Color::Green)
                     } else {
                         Style::new().fg(Color::Red)
                     }),
-                    Cell::from(if h.bytes > 0 { human(h.bytes) } else { String::new() }),
+                    Cell::from(if h.bytes > 0 {
+                        human(h.bytes)
+                    } else {
+                        String::new()
+                    }),
                     Cell::from(safe_inline(&h.name)),
                     Cell::from(safe_inline(&h.message)).style(Style::new().fg(Color::DarkGray)),
                 ])
@@ -1479,7 +1708,10 @@ impl App {
             " {} cleanups · {} freed in total · {} ",
             self.history.len(),
             human(total),
-            safe_inline(&tilde(&state::state_dir().join("history.jsonl"), &self.home))
+            safe_inline(&tilde(
+                &state::state_dir().join("history.jsonl"),
+                &self.home
+            ))
         )));
         f.render_widget(table, area);
     }
@@ -1488,31 +1720,60 @@ impl App {
         let line = if self.searching {
             Line::from(vec![
                 Span::styled(" / ", Style::new().fg(Color::Black).bg(Color::Yellow)),
-                Span::raw(format!(" {}▏  enter keep · esc clear", safe_inline(&self.search))),
+                Span::raw(format!(
+                    " {}▏  enter keep · esc clear",
+                    safe_inline(&self.search)
+                )),
             ])
         } else if !self.status.is_empty() {
-            Line::from(Span::styled(format!(" {}", safe_inline(&self.status)), Style::new().fg(Color::Yellow)))
+            Line::from(Span::styled(
+                format!(" {}", safe_inline(&self.status)),
+                Style::new().fg(Color::Yellow),
+            ))
         } else {
             let marks = match self.tab {
                 Tab::Disk if !self.disk_sel.marked.is_empty() => {
-                    let bytes: u64 = self.items.iter().filter(|i| self.disk_sel.marked.contains(&i.id)).map(|i| i.reclaimable).sum();
-                    Some(format!(" {} marked ({}) · d clean · u clear ", self.disk_sel.marked.len(), human(bytes)))
+                    let bytes: u64 = self
+                        .items
+                        .iter()
+                        .filter(|i| self.disk_sel.marked.contains(&i.id))
+                        .map(|i| i.reclaimable)
+                        .sum();
+                    Some(format!(
+                        " {} marked ({}) · d clean · u clear ",
+                        self.disk_sel.marked.len(),
+                        human(bytes)
+                    ))
                 }
-                Tab::Procs if !self.proc_sel.marked.is_empty() => {
-                    Some(format!(" {} marked · d kill · u clear ", self.proc_sel.marked.len()))
-                }
+                Tab::Procs if !self.proc_sel.marked.is_empty() => Some(format!(
+                    " {} marked · d kill · u clear ",
+                    self.proc_sel.marked.len()
+                )),
                 _ => None,
             };
             let hints = match self.tab {
-                Tab::Disk => "space/J/K/v mark · a SAFE · * all · d clean · x ask · A agent · p pin · o reveal · f c s / filter · r rescan · ? help · q quit",
-                Tab::Procs => "space/J/K mark · * all · d kill · x ask · A agent · r refresh · ? help · q quit",
+                Tab::Disk => {
+                    "space/J/K/v mark · a SAFE · * all · d clean · x ask · A agent · p pin · o reveal · f c s / filter · r rescan · ? help · q quit"
+                }
+                Tab::Procs => {
+                    "space/J/K mark · * all · d kill · x ask · A agent · r refresh · ? help · q quit"
+                }
                 Tab::History => "r reload · tab switch · q quit",
             };
             let mut spans = Vec::new();
             if let Some(m) = marks {
-                spans.push(Span::styled(m, Style::new().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(
+                    m,
+                    Style::new()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ));
             }
-            spans.push(Span::styled(format!(" {hints}"), Style::new().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                format!(" {hints}"),
+                Style::new().fg(Color::DarkGray),
+            ));
             Line::from(spans)
         };
         f.render_widget(Paragraph::new(line), area);
@@ -1524,17 +1785,27 @@ impl App {
             .filter_map(|id| self.items.iter().find(|i| &i.id == id))
             .collect();
         let total: u64 = items.iter().map(|i| i.reclaimable).sum();
-        let not_safe = items.iter().filter(|i| i.effective_verdict() != Verdict::Safe).count();
+        let not_safe = items
+            .iter()
+            .filter(|i| i.effective_verdict() != Verdict::Safe)
+            .count();
         let mut lines = vec![
             Line::from(Span::styled(
-                format!("Clean {} item(s) and free about {}?", items.len(), human(total)),
+                format!(
+                    "Clean {} item(s) and free about {}?",
+                    items.len(),
+                    human(total)
+                ),
                 Style::new().add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
         ];
         if !skipped.is_empty() {
             lines.push(Line::from(Span::styled(
-                format!("{} marked item(s) are skipped: KEEP, pinned, or no automatic action.", skipped.len()),
+                format!(
+                    "{} marked item(s) are skipped: KEEP, pinned, or no automatic action.",
+                    skipped.len()
+                ),
                 Style::new().fg(Color::Magenta),
             )));
             lines.push(Line::from(""));
@@ -1551,17 +1822,30 @@ impl App {
             let v = i.effective_verdict();
             lines.push(Line::from(vec![
                 Span::styled(format!("{:<6} ", v.label()), verdict_style(v)),
-                Span::raw(format!("{:>7}  {}", human(i.reclaimable), safe_inline(&i.name))),
+                Span::raw(format!(
+                    "{:>7}  {}",
+                    human(i.reclaimable),
+                    safe_inline(&i.name)
+                )),
             ]));
             lines.push(Line::from(Span::styled(
-                format!("         $ {}", safe_inline(&i.action.describe().replace(&home, "~"))),
+                format!(
+                    "         $ {}",
+                    safe_inline(&i.action.describe().replace(&home, "~"))
+                ),
                 Style::new().fg(Color::DarkGray),
             )));
         }
         if items.len() > 12 {
             lines.push(Line::from(format!("… and {} more", items.len() - 12)));
         }
-        modal(f, " Confirm cleanup ", Text::from(lines), confirm_keys("clean", Color::Green), 110);
+        modal(
+            f,
+            " Confirm cleanup ",
+            Text::from(lines),
+            confirm_keys("clean", Color::Green),
+            110,
+        );
     }
 
     fn draw_confirm_kill(&self, f: &mut Frame, pids: &[(u32, String)]) {
@@ -1578,15 +1862,30 @@ impl App {
         if pids.len() > 14 {
             lines.push(Line::from(format!("… and {} more", pids.len() - 14)));
         }
-        modal(f, " Confirm kill ", Text::from(lines), confirm_keys("kill", Color::Red), 70);
+        modal(
+            f,
+            " Confirm kill ",
+            Text::from(lines),
+            confirm_keys("kill", Color::Red),
+            70,
+        );
     }
 }
 
 fn confirm_keys(verb: &str, color: Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled(" y ", Style::new().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " y ",
+            Style::new()
+                .fg(Color::Black)
+                .bg(color)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!(" {verb}   ")),
-        Span::styled(" any other key ", Style::new().fg(Color::Black).bg(Color::DarkGray)),
+        Span::styled(
+            " any other key ",
+            Style::new().fg(Color::Black).bg(Color::DarkGray),
+        ),
         Span::raw(" cancel"),
     ])
 }
@@ -1616,7 +1915,9 @@ fn modal(f: &mut Frame, title: &str, body: Text, keys: Line, max_w: u16) {
     let area = f.area();
     let w = max_w.min(area.width.saturating_sub(4)).max(20);
     let inner_w = w.saturating_sub(2);
-    let h = (wrapped_rows(&body, inner_w) + 4).min(area.height.saturating_sub(2)).max(5);
+    let h = (wrapped_rows(&body, inner_w) + 4)
+        .min(area.height.saturating_sub(2))
+        .max(5);
     let rect = Rect {
         x: area.x + area.width.saturating_sub(w) / 2,
         y: area.y + area.height.saturating_sub(h) / 2,
@@ -1629,8 +1930,12 @@ fn modal(f: &mut Frame, title: &str, body: Text, keys: Line, max_w: u16) {
         .border_style(Style::new().fg(Color::Yellow));
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    let [body_area, _, keys_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let [body_area, _, keys_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
     f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), body_area);
     f.render_widget(Paragraph::new(keys), keys_area);
 }
@@ -1638,18 +1943,39 @@ fn modal(f: &mut Frame, title: &str, body: Text, keys: Line, max_w: u16) {
 fn draw_help(f: &mut Frame) {
     let rows = [
         ("", "STATES"),
-        ("SAFE", "leftover with nothing depending on it (gone project, merged branch, orphan cache)"),
-        ("REVIEW", "probably removable, but it costs something (rebuild, re-download) or is unrecognized"),
+        (
+            "SAFE",
+            "leftover with nothing depending on it (gone project, merged branch, orphan cache)",
+        ),
+        (
+            "REVIEW",
+            "probably removable, but it costs something (rebuild, re-download) or is unrecognized",
+        ),
         ("IN USE", "tied to recent work or a running process"),
-        ("KEEP", "uncommitted or unpushed work, dedicated to a live worktree, or pinned by you"),
+        (
+            "KEEP",
+            "uncommitted or unpushed work, dedicated to a live worktree, or pinned by you",
+        ),
         ("", ""),
         ("", "SELECT"),
         ("space", "mark / unmark the current row"),
-        ("J K ⇧↑⇧↓", "mark the current row and move (hold to sweep a run of rows)"),
-        ("v", "start a range at this row; v or space again marks everything in between"),
-        ("a / *", "mark every SAFE item in view / every cleanable item in view"),
+        (
+            "J K ⇧↑⇧↓",
+            "mark the current row and move (hold to sweep a run of rows)",
+        ),
+        (
+            "v",
+            "start a range at this row; v or space again marks everything in between",
+        ),
+        (
+            "a / *",
+            "mark every SAFE item in view / every cleanable item in view",
+        ),
         ("u", "clear all marks"),
-        ("d", "clean the marked items (or the current one) after a confirm; kills on Processes"),
+        (
+            "d",
+            "clean the marked items (or the current one) after a confirm; kills on Processes",
+        ),
         ("", ""),
         ("", "OTHER KEYS"),
         ("j/k ↑↓", "move · g/G top/bottom · PgUp/PgDn"),
@@ -1657,17 +1983,29 @@ fn draw_help(f: &mut Frame) {
         ("A", "choose the AI agent, model, and effort"),
         ("p", "pin: never clean this item (saved across runs)"),
         ("o / y", "reveal in Finder / copy path"),
-        ("f c s /", "filter by state · filter by kind · change sort · search"),
+        (
+            "f c s /",
+            "filter by state · filter by kind · change sort · search",
+        ),
         ("r", "rescan (disk) · refresh (processes)"),
-        ("1 2 3 tab", "switch tabs · q quits · esc closes dialogs and clears a range"),
+        (
+            "1 2 3 tab",
+            "switch tabs · q quits · esc closes dialogs and clears a range",
+        ),
         ("", ""),
-        ("", "Config: ~/.config/dustpan/config.toml · state + history: ~/.local/state/dustpan"),
+        (
+            "",
+            "Config: ~/.config/dustpan/config.toml · state + history: ~/.local/state/dustpan",
+        ),
     ];
     let lines: Vec<Line> = rows
         .iter()
         .map(|(k, v)| {
             if k.is_empty() {
-                Line::from(Span::styled(v.to_string(), Style::new().add_modifier(Modifier::BOLD)))
+                Line::from(Span::styled(
+                    v.to_string(),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ))
             } else {
                 let style = match *k {
                     "SAFE" => verdict_style(Verdict::Safe),
@@ -1676,11 +2014,17 @@ fn draw_help(f: &mut Frame) {
                     "KEEP" => verdict_style(Verdict::Keep),
                     _ => Style::new().fg(Color::Cyan),
                 };
-                Line::from(vec![Span::styled(format!("  {k:<11}"), style), Span::raw(v.to_string())])
+                Line::from(vec![
+                    Span::styled(format!("  {k:<11}"), style),
+                    Span::raw(v.to_string()),
+                ])
             }
         })
         .collect();
-    let keys = Line::from(Span::styled("any key closes", Style::new().fg(Color::DarkGray)));
+    let keys = Line::from(Span::styled(
+        "any key closes",
+        Style::new().fg(Color::DarkGray),
+    ));
     modal(f, " Help ", Text::from(lines), keys, 108);
 }
 
@@ -1698,25 +2042,37 @@ fn copy(text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::Action;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn app_with_items() -> App {
         let mut app = App::new(Config::default());
         app.state = State::default();
         app.persist = false;
         app.cfg.ai = crate::config::AiConfig::default();
-        let mut a = Item::new(Category::DerivedData, "MyApp · ~/gone/ios/MyApp.xcworkspace", "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-a");
+        let mut a = Item::new(
+            Category::DerivedData,
+            "MyApp · ~/gone/ios/MyApp.xcworkspace",
+            "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-a",
+        );
         a.verdict = Verdict::Safe;
         a.bytes = 20 << 30;
         a.reclaimable = 20 << 30;
         a.reasons = vec!["project ~/gone no longer exists".into()];
         a.action = Action::delete("/Users/me/Library/Developer/Xcode/DerivedData/MyApp-a");
-        let mut b = Item::new(Category::Worktree, "MyApp · feature/x", "/Users/me/Work/MyApp-wt/x");
+        let mut b = Item::new(
+            Category::Worktree,
+            "MyApp · feature/x",
+            "/Users/me/Work/MyApp-wt/x",
+        );
         b.verdict = Verdict::Keep;
         b.bytes = 3 << 30;
         b.reasons = vec!["2 uncommitted change(s)".into()];
-        b.action = Action::run("git", &["worktree", "remove", "/Users/me/Work/MyApp-wt/x"], None);
+        b.action = Action::run(
+            "git",
+            &["worktree", "remove", "/Users/me/Work/MyApp-wt/x"],
+            None,
+        );
         app.items = vec![a, b];
         app
     }
@@ -1862,12 +2218,21 @@ mod tests {
     }
 
     fn safe_item(n: usize) -> Item {
-        let long = format!("/Users/me/.codex/.tmp/marketplaces/.staging/marketplace-upgrade-{n:0>40}");
-        let mut i = Item::new(Category::Leftover, format!("leftover {n} with a fairly long descriptive name"), &long);
+        let long =
+            format!("/Users/me/.codex/.tmp/marketplaces/.staging/marketplace-upgrade-{n:0>40}");
+        let mut i = Item::new(
+            Category::Leftover,
+            format!("leftover {n} with a fairly long descriptive name"),
+            &long,
+        );
         i.verdict = Verdict::Safe;
         i.bytes = 1 << 30;
         i.reclaimable = 1 << 30;
-        i.action = Action::delete_all((0..600).map(|k| PathBuf::from(format!("{long}/{k}"))).collect());
+        i.action = Action::delete_all(
+            (0..600)
+                .map(|k| PathBuf::from(format!("{long}/{k}")))
+                .collect(),
+        );
         i
     }
 
@@ -1879,7 +2244,10 @@ mod tests {
         key(&mut app, KeyCode::Char('d'));
         for (w, h) in [(80, 24), (100, 30), (190, 48)] {
             let screen = render(&mut app, w, h);
-            assert!(screen.contains(" y  clean"), "confirm keys missing at {w}x{h}\n{screen}");
+            assert!(
+                screen.contains(" y  clean"),
+                "confirm keys missing at {w}x{h}\n{screen}"
+            );
         }
     }
 
@@ -1907,7 +2275,11 @@ mod tests {
         assert_eq!(app.disk_sel.marked.len(), 2);
         key(&mut app, KeyCode::Char('u'));
         key(&mut app, KeyCode::Char('*'));
-        assert_eq!(app.disk_sel.marked.len(), 4, "KEEP worktree must not be marked");
+        assert_eq!(
+            app.disk_sel.marked.len(),
+            4,
+            "KEEP worktree must not be marked"
+        );
     }
 
     #[test]
@@ -1945,9 +2317,18 @@ mod tests {
             default_effort: Some(default.into()),
         };
         Catalog {
-            codex: vec![m("gpt-a", &["low", "medium", "high"], "medium"), m("gpt-b", &["low", "xhigh"], "low")],
+            codex: vec![
+                m("gpt-a", &["low", "medium", "high"], "medium"),
+                m("gpt-b", &["low", "xhigh"], "low"),
+            ],
             claude: vec![m("opus", &[], ""), m("sonnet", &[], "")],
-            claude_efforts: vec!["low".into(), "medium".into(), "high".into(), "xhigh".into(), "max".into()],
+            claude_efforts: vec![
+                "low".into(),
+                "medium".into(),
+                "high".into(),
+                "xhigh".into(),
+                "max".into(),
+            ],
             notes: vec!["test note".into()],
         }
     }
@@ -1958,13 +2339,19 @@ mod tests {
         app.catalog = Some(catalog());
         app.cfg.ai.codex_model = "gpt-a".into();
         key(&mut app, KeyCode::Char('A'));
-        assert!(!app.catalog_loading, "an existing catalog must not be refetched");
+        assert!(
+            !app.catalog_loading,
+            "an existing catalog must not be refetched"
+        );
         key(&mut app, KeyCode::Right);
         assert_eq!(app.cfg.ai.provider, "codex");
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Right);
         assert_eq!(app.cfg.ai.codex_model, "gpt-b");
-        assert_eq!(app.cfg.ai.effort, "low", "medium isn't offered by gpt-b, so it snaps to gpt-b's default");
+        assert_eq!(
+            app.cfg.ai.effort, "low",
+            "medium isn't offered by gpt-b, so it snaps to gpt-b's default"
+        );
         let screen = render(&mut app, 120, 30);
         assert!(screen.contains("gpt-b about"));
         assert!(screen.contains("efforts: low, xhigh"));

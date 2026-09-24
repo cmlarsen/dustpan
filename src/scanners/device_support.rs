@@ -25,8 +25,11 @@ pub fn parse_name(name: &str) -> Option<(String, Vec<u32>)> {
 pub fn scan(ctx: &Ctx, emit: Emit) {
     for platform in PLATFORMS {
         let root = ctx.home.join("Library/Developer/Xcode").join(platform);
-        let Ok(entries) = std::fs::read_dir(&root) else { continue };
-        let mut groups: HashMap<String, Vec<(Vec<u32>, std::path::PathBuf, String)>> = HashMap::new();
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut groups: HashMap<String, Vec<(Vec<u32>, std::path::PathBuf, String)>> =
+            HashMap::new();
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if let Some((model, ver)) = parse_name(&name) {
@@ -45,7 +48,11 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
                     &stats,
                 );
                 item.action = Action::delete(&path);
-                let device = if model.is_empty() { "this platform".to_string() } else { model.clone() };
+                let device = if model.is_empty() {
+                    "this platform".to_string()
+                } else {
+                    model.clone()
+                };
                 if i == 0 {
                     item.verdict = Verdict::Active;
                     item.reasons = vec![format!("newest debug symbols for {device}")];
@@ -72,7 +79,10 @@ mod tests {
             parse_name("iPhone17,1 27.0 (24A435)"),
             Some(("iPhone17,1".into(), vec![27, 0]))
         );
-        assert_eq!(parse_name("17.0.3 (21A360)"), Some((String::new(), vec![17, 0, 3])));
+        assert_eq!(
+            parse_name("17.0.3 (21A360)"),
+            Some((String::new(), vec![17, 0, 3]))
+        );
         assert_eq!(parse_name("garbage"), None);
     }
 }

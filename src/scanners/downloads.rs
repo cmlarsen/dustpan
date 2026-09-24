@@ -20,16 +20,22 @@ pub fn kind_of(path: &Path) -> Option<&'static str> {
 
 pub fn scan(ctx: &Ctx, emit: Emit) {
     let dir = ctx.home.join("Downloads");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let path = e.path();
         let Some(kind) = kind_of(&path) else { continue };
-        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
         if !meta.is_file() {
             continue;
         }
         let modified = mtime(&path);
-        let Some(age) = age_days(modified, ctx.now).filter(|d| *d >= MIN_AGE_DAYS) else { continue };
+        let Some(age) = age_days(modified, ctx.now).filter(|d| *d >= MIN_AGE_DAYS) else {
+            continue;
+        };
         let name = e.file_name().to_string_lossy().into_owned();
         let mut item = Item::new(Category::Download, name, &path);
         item.bytes = meta.len();
@@ -37,7 +43,9 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
         item.last_used = modified;
         item.verdict = Verdict::Review;
         item.reasons = vec![match kind {
-            "installer" => format!("installer downloaded {age} days ago; the installed app doesn't need it"),
+            "installer" => {
+                format!("installer downloaded {age} days ago; the installed app doesn't need it")
+            }
             _ => format!("archive downloaded {age} days ago; check you extracted what you need"),
         }];
         item.action = Action::delete(&path);
