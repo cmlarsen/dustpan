@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -83,42 +85,87 @@ pub struct CmdOut {
 }
 
 pub fn run(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duration) -> Option<CmdOut> {
+    run_with(program, args, cwd, &[], None, timeout)
+}
+
+fn read_all(mut r: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = r.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    rx
+}
+
+fn kill_group(child: &Child) {
+    if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+    }
+}
+
+pub fn run_with(
+    program: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    env: &[(&str, &str)],
+    stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Option<CmdOut> {
     let mut cmd = Command::new(program);
     cmd.args(args)
-        .stdin(Stdio::null())
+        .envs(env.iter().copied())
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .process_group(0);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
     let mut child = cmd.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
-    let mut stderr = child.stderr.take()?;
-    let out_reader = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
-    let start = Instant::now();
+    if let (Some(mut pipe), Some(input)) = (child.stdin.take(), stdin) {
+        let input = input.to_vec();
+        thread::spawn(move || {
+            let _ = pipe.write_all(&input);
+        });
+    }
+    let Some((stdout, stderr)) = child.stdout.take().zip(child.stderr.take()) else {
+        kill_group(&child);
+        let _ = child.wait();
+        return None;
+    };
+    let out_rx = read_all(stdout);
+    let err_rx = read_all(stderr);
+    let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if start.elapsed() > timeout => {
-                let _ = child.kill();
+            Ok(None) if Instant::now() > deadline => {
+                kill_group(&child);
                 let _ = child.wait();
                 break None;
             }
             Ok(None) => thread::sleep(Duration::from_millis(15)),
-            Err(_) => break None,
+            Err(_) => {
+                kill_group(&child);
+                let _ = child.wait();
+                break None;
+            }
         }
     };
-    let out = out_reader.join().unwrap_or_default();
-    let err = err_reader.join().unwrap_or_default();
+    let collect = |rx: &mpsc::Receiver<Vec<u8>>| {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        rx.recv_timeout(wait).ok().or_else(|| {
+            if status.is_some() {
+                kill_group(&child);
+            }
+            rx.recv_timeout(Duration::from_secs(1)).ok()
+        })
+    };
+    let out = collect(&out_rx).unwrap_or_default();
+    let err = collect(&err_rx).unwrap_or_default();
     status.map(|s| CmdOut {
         ok: s.success(),
         stdout: String::from_utf8_lossy(&out).into_owned(),
@@ -173,5 +220,30 @@ mod tests {
         let out = run("echo", &["hi"], None, Duration::from_secs(5)).unwrap();
         assert!(out.ok);
         assert_eq!(out.stdout.trim(), "hi");
+    }
+
+    #[test]
+    fn run_timeout_kills_grandchildren_holding_stdout() {
+        let start = Instant::now();
+        let out = run("sh", &["-c", "sleep 30 & sleep 30"], None, Duration::from_millis(500));
+        assert!(out.is_none());
+        assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn run_returns_when_exited_child_leaves_stdout_held_open() {
+        let start = Instant::now();
+        let out = run("sh", &["-c", "sleep 30 & echo hi"], None, Duration::from_millis(500)).unwrap();
+        assert!(out.ok);
+        assert_eq!(out.stdout.trim(), "hi");
+        assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn run_with_feeds_stdin_and_env() {
+        let out = run_with("cat", &[], None, &[], Some(b"secret-header"), Duration::from_secs(5)).unwrap();
+        assert_eq!(out.stdout, "secret-header");
+        let out = run_with("sh", &["-c", "echo $DP_TEST_VAR"], None, &[("DP_TEST_VAR", "set")], None, Duration::from_secs(5)).unwrap();
+        assert_eq!(out.stdout.trim(), "set");
     }
 }

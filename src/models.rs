@@ -1,4 +1,4 @@
-use crate::util::run;
+use crate::util::{run, run_with};
 use serde::Deserialize;
 use std::time::Duration;
 
@@ -142,30 +142,17 @@ pub fn parse_anthropic_models(json: &str) -> Vec<ModelOption> {
         .unwrap_or_default()
 }
 
+const ANTHROPIC_MODELS_ARGS: &[&str] = &["-sf", "--max-time", "8", "-H", "@-", "https://api.anthropic.com/v1/models?limit=100"];
+
+fn anthropic_headers(key: &str) -> String {
+    format!("x-api-key: {key}\nanthropic-version: 2023-06-01\n")
+}
+
 fn anthropic_api_models() -> Option<Vec<ModelOption>> {
     let key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.is_empty())?;
-    let header = std::env::temp_dir().join(format!("dustpan-hdr-{}", std::process::id()));
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&header)
-            .ok()?;
-        writeln!(f, "x-api-key: {key}\nanthropic-version: 2023-06-01").ok()?;
-    }
-    let header_arg = format!("@{}", header.display());
-    let out = run(
-        "curl",
-        &["-sf", "--max-time", "8", "-H", &header_arg, "https://api.anthropic.com/v1/models?limit=100"],
-        None,
-        Duration::from_secs(10),
-    );
-    let _ = std::fs::remove_file(&header);
-    let models = parse_anthropic_models(&out?.stdout);
+    let headers = anthropic_headers(&key);
+    let out = run_with("curl", ANTHROPIC_MODELS_ARGS, None, &[], Some(headers.as_bytes()), Duration::from_secs(10))?;
+    let models = parse_anthropic_models(&out.stdout);
     (!models.is_empty()).then_some(models)
 }
 
@@ -252,6 +239,15 @@ mod tests {
     fn anthropic_models_page() {
         let json = r#"{"data":[{"id":"claude-opus-5","display_name":"Claude Opus 5","type":"model"}],"has_more":false}"#;
         assert_eq!(parse_anthropic_models(json)[0].id, "claude-opus-5");
+    }
+
+    #[test]
+    fn api_key_goes_to_curl_on_stdin_not_disk_or_argv() {
+        let headers = anthropic_headers("sk-test-key");
+        assert!(headers.starts_with("x-api-key: sk-test-key\n"));
+        assert!(!ANTHROPIC_MODELS_ARGS.iter().any(|a| a.contains("sk-test-key") || a.starts_with("@/")));
+        let h = ANTHROPIC_MODELS_ARGS.iter().position(|a| *a == "-H").unwrap();
+        assert_eq!(ANTHROPIC_MODELS_ARGS[h + 1], "@-");
     }
 
     #[test]
