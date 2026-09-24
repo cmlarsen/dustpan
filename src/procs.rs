@@ -1,5 +1,5 @@
 use crate::model::Verdict;
-use crate::util::run;
+use crate::util::{run, CmdOut};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -108,6 +108,30 @@ pub fn list() -> Vec<Proc> {
     .unwrap_or_default()
 }
 
+pub fn decode_lsof_name(v: &str) -> String {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = (b[i] == b'\\' && b.get(i + 1) == Some(&b'x'))
+            .then(|| b.get(i + 2..i + 4))
+            .flatten()
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub fn parse_lsof_fields(text: &str) -> HashMap<u32, Vec<String>> {
     let mut map: HashMap<u32, Vec<String>> = HashMap::new();
     let mut pid = None;
@@ -116,9 +140,10 @@ pub fn parse_lsof_fields(text: &str) -> HashMap<u32, Vec<String>> {
             Some(("p", v)) => pid = v.parse().ok(),
             Some(("n", v)) => {
                 if let Some(p) = pid {
+                    let v = decode_lsof_name(v);
                     let list = map.entry(p).or_default();
-                    if !list.iter().any(|x| x == v) {
-                        list.push(v.to_string());
+                    if !list.contains(&v) {
+                        list.push(v);
                     }
                 }
             }
@@ -128,26 +153,35 @@ pub fn parse_lsof_fields(text: &str) -> HashMap<u32, Vec<String>> {
     map
 }
 
-pub fn cwds() -> HashMap<u32, PathBuf> {
-    run("lsof", &["-nP", "-a", "-d", "cwd", "-Fpn"], None, Duration::from_secs(20))
-        .map(|o| {
-            parse_lsof_fields(&o.stdout)
-                .into_iter()
-                .filter_map(|(pid, v)| v.into_iter().next().map(|p| (pid, PathBuf::from(p))))
-                .collect()
-        })
-        .unwrap_or_default()
+pub fn lsof_output(out: Option<&CmdOut>) -> Option<HashMap<u32, Vec<String>>> {
+    let out = out?;
+    let no_matches = out.stdout.trim().is_empty() && out.stderr.trim().is_empty();
+    (out.ok || no_matches).then(|| parse_lsof_fields(&out.stdout))
 }
 
-pub fn listeners() -> HashMap<u32, Vec<String>> {
-    run(
+pub fn cwds() -> Option<HashMap<u32, PathBuf>> {
+    let out = run("lsof", &["-nP", "-a", "-d", "cwd", "-Fpn"], None, Duration::from_secs(20));
+    let fields = lsof_output(out.as_ref())?;
+    if fields.is_empty() {
+        return None;
+    }
+    Some(
+        fields
+            .into_iter()
+            .filter_map(|(pid, v)| v.into_iter().next().map(|p| (pid, PathBuf::from(p))))
+            .collect(),
+    )
+}
+
+pub fn listeners() -> Option<HashMap<u32, Vec<String>>> {
+    let out = run(
         "lsof",
         &["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"],
         None,
         Duration::from_secs(20),
-    )
-    .map(|o| {
-        parse_lsof_fields(&o.stdout)
+    );
+    Some(
+        lsof_output(out.as_ref())?
             .into_iter()
             .map(|(pid, addrs)| {
                 let ports = addrs
@@ -156,9 +190,12 @@ pub fn listeners() -> HashMap<u32, Vec<String>> {
                     .collect::<Vec<_>>();
                 (pid, dedup(ports))
             })
-            .collect()
-    })
-    .unwrap_or_default()
+            .collect(),
+    )
+}
+
+pub fn cwd_deleted(cwd: &Path) -> bool {
+    matches!(cwd.try_exists(), Ok(false))
 }
 
 fn dedup(mut v: Vec<String>) -> Vec<String> {
@@ -236,7 +273,8 @@ const OTHER_TOOL: &str = "running under another app or tool";
 pub struct ProcFacts<'a> {
     pub kind: DevKind,
     pub cwd: Option<&'a Path>,
-    pub cwd_exists: bool,
+    pub cwd_deleted: bool,
+    pub ports_known: bool,
     pub orphaned: bool,
     pub tty: &'a str,
     pub uptime_secs: u64,
@@ -246,12 +284,17 @@ pub struct ProcFacts<'a> {
 pub fn classify_proc(f: &ProcFacts) -> (Verdict, Vec<String>) {
     let mut reasons = Vec::new();
     let has_tty = !f.tty.is_empty() && f.tty != "??";
-    if f.cwd.is_some() && !f.cwd_exists {
+    if f.cwd.is_some() && f.cwd_deleted {
         reasons.push("its working directory was deleted".into());
-        return (Verdict::Safe, reasons);
+        if !has_tty && f.ports.is_empty() && f.ports_known {
+            return (Verdict::Safe, reasons);
+        }
     }
     if !f.ports.is_empty() {
         reasons.push(format!("listening on {}", f.ports.join(", ")));
+    }
+    if !f.ports_known {
+        reasons.push("couldn't check its listening ports (lsof failed)".into());
     }
     if has_tty {
         reasons.push(format!("attached to terminal {}", f.tty));
@@ -348,7 +391,7 @@ fn parse_swap_used(s: &str) -> Option<u64> {
 
 pub fn snapshot() -> ProcSnapshot {
     let procs = list();
-    let cwds = cwds();
+    let cwds = cwds().unwrap_or_default();
     let ports = listeners();
     let mem = mem_summary();
     let apps = group_by_app(&procs);
@@ -357,12 +400,12 @@ pub fn snapshot() -> ProcSnapshot {
     for p in &procs {
         let Some((kind, name)) = dev_kind(&p.comm) else { continue };
         let cwd = cwds.get(&p.pid).cloned();
-        let p_ports = ports.get(&p.pid).cloned().unwrap_or_default();
-        let cwd_exists = cwd.as_ref().is_none_or(|c| c.exists());
+        let p_ports = ports.as_ref().and_then(|m| m.get(&p.pid)).cloned().unwrap_or_default();
         let (verdict, mut reasons) = classify_proc(&ProcFacts {
             kind,
             cwd: cwd.as_deref(),
-            cwd_exists,
+            cwd_deleted: cwd.as_deref().is_some_and(cwd_deleted),
+            ports_known: ports.is_some(),
             orphaned: p.ppid == 1,
             tty: &p.tty,
             uptime_secs: p.uptime_secs,
@@ -434,6 +477,37 @@ mod tests {
     }
 
     #[test]
+    fn lsof_names_decode_hex_escapes() {
+        let m = parse_lsof_fields("p7\nfcwd\nn/Users/me/caf\\xc3\\xa9 dir\n");
+        assert_eq!(m[&7], vec!["/Users/me/café dir"]);
+        assert_eq!(decode_lsof_name("/a\\xzz/b\\x4"), "/a\\xzz/b\\x4");
+    }
+
+    #[test]
+    fn lsof_failure_is_unknown_but_no_matches_is_empty() {
+        let out = |ok: bool, stdout: &str, stderr: &str| CmdOut { ok, stdout: stdout.into(), stderr: stderr.into() };
+        assert_eq!(lsof_output(None), None);
+        assert_eq!(lsof_output(Some(&out(false, "", "lsof: fatal"))), None);
+        assert_eq!(lsof_output(Some(&out(false, "p1\nn/x\n", "lsof: WARNING"))), None);
+        assert_eq!(lsof_output(Some(&out(false, "", ""))), Some(HashMap::new()));
+        assert_eq!(lsof_output(Some(&out(true, "p1\nn/x\n", ""))).unwrap()[&1], vec!["/x"]);
+    }
+
+    #[test]
+    fn cwd_deleted_only_when_stat_says_missing() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(!cwd_deleted(d.path()));
+        assert!(cwd_deleted(&d.path().join("gone")));
+        let locked = d.path().join("locked");
+        std::fs::create_dir_all(locked.join("cwd")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let deleted = cwd_deleted(&locked.join("cwd"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
     fn dev_kinds_skip_app_bundles() {
         assert!(dev_kind("/Applications/ChatGPT.app/Contents/Resources/codex").is_none());
         assert_eq!(dev_kind("/opt/homebrew/bin/node").unwrap().0, DevKind::Server);
@@ -449,21 +523,47 @@ mod tests {
         let base = ProcFacts {
             kind: DevKind::Server,
             cwd: Some(Path::new("/gone")),
-            cwd_exists: false,
+            cwd_deleted: true,
+            ports_known: true,
             orphaned: true,
             tty: "??",
             uptime_secs: 10,
             ports: &[],
         };
         assert_eq!(classify_proc(&base).0, Verdict::Safe);
-        let alive = ProcFacts { cwd_exists: true, ..base };
+        let alive = ProcFacts { cwd_deleted: false, ..base };
         assert_eq!(classify_proc(&alive).0, Verdict::Active);
-        let old = ProcFacts { uptime_secs: 3 * 86_400, cwd_exists: true, ..alive };
+        let old = ProcFacts { uptime_secs: 3 * 86_400, cwd_deleted: false, ..alive };
         assert_eq!(classify_proc(&old).0, Verdict::Review);
-        let tty = ProcFacts { tty: "ttys001", uptime_secs: 3 * 86_400, cwd_exists: true, ..alive };
+        let tty = ProcFacts { tty: "ttys001", uptime_secs: 3 * 86_400, cwd_deleted: false, ..alive };
         assert_eq!(classify_proc(&tty).0, Verdict::Active);
-        let agent = ProcFacts { kind: DevKind::Agent, cwd_exists: true, ..alive };
+        let agent = ProcFacts { kind: DevKind::Agent, cwd_deleted: false, ..alive };
         assert_eq!(classify_proc(&agent).0, Verdict::Review);
+    }
+
+    #[test]
+    fn deleted_cwd_is_not_safe_with_tty_ports_or_unknown_ports() {
+        let base = ProcFacts {
+            kind: DevKind::Server,
+            cwd: Some(Path::new("/gone")),
+            cwd_deleted: true,
+            ports_known: true,
+            orphaned: true,
+            tty: "??",
+            uptime_secs: 10,
+            ports: &[],
+        };
+        let tty = ProcFacts { tty: "ttys002", ..base };
+        let (v, r) = classify_proc(&tty);
+        assert_eq!(v, Verdict::Active);
+        assert!(r[0].contains("deleted"));
+        let ports = [":3000".to_string()];
+        let listening = ProcFacts { ports: &ports, ..base };
+        assert_ne!(classify_proc(&listening).0, Verdict::Safe);
+        let unknown = ProcFacts { ports_known: false, ..base };
+        let (v, r) = classify_proc(&unknown);
+        assert_ne!(v, Verdict::Safe);
+        assert!(r.iter().any(|x| x.contains("lsof failed")));
     }
 
     #[test]
