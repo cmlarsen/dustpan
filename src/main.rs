@@ -83,7 +83,11 @@ fn clear_progress() {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = config::load()?;
-    match cli.cmd.unwrap_or(Cmd::Tui) {
+    let cmd = cli.cmd.unwrap_or(Cmd::Tui);
+    if !matches!(cmd, Cmd::Tui) {
+        util::kill_children_on_interrupt();
+    }
+    match cmd {
         Cmd::Tui => tui::run(cfg),
         Cmd::Report { json, all } => {
             let (items, secs) = scan::collect(cfg, progress);

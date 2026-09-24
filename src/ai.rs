@@ -9,7 +9,7 @@ use tempfile::NamedTempFile;
 
 const PREAMBLE: &str = "You are helping a developer decide whether to clean something up on their Mac. \
 They work on many projects at once, so anything tied to active work must be kept. \
-Investigate read-only: list folders, check sizes, read files, run git status. \
+Investigate read-only: list folders, check sizes, read files, list git worktrees. \
 Never modify, move, or delete anything.";
 
 const ANSWER_FORMAT: &str = "Answer in at most 8 short lines, plain text, no markdown headers.\n\
@@ -74,7 +74,7 @@ pub fn workdir_for(path: &Path, home: &Path) -> PathBuf {
 const CLAUDE_TOOLS: &str = "Read,Glob,Grep,Bash";
 
 const CLAUDE_ALLOWED: &str = "Read,Glob,Grep,Bash(ls:*),Bash(du:*),Bash(stat:*),Bash(head:*),\
-Bash(git status:*),Bash(git worktree list:*),Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)";
+Bash(git worktree list:*),Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)";
 
 const LOCKDOWN_ENV: &[(&str, &str)] = &[
     ("GIT_OPTIONAL_LOCKS", "0"),
@@ -185,8 +185,8 @@ mod tests {
             "-p", "hi", "--output-format", "text", "--add-dir", "/w", "--model", "claude-opus-5", "--effort", "medium",
             "--tools", "Read,Glob,Grep,Bash",
             "--allowedTools",
-            "Read,Glob,Grep,Bash(ls:*),Bash(du:*),Bash(stat:*),Bash(head:*),Bash(git status:*),\
-Bash(git worktree list:*),Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
+            "Read,Glob,Grep,Bash(ls:*),Bash(du:*),Bash(stat:*),Bash(head:*),Bash(git worktree list:*),\
+Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
             "--permission-mode", "dontAsk", "--setting-sources", "", "--strict-mcp-config",
         ]
         .map(String::from)
@@ -199,7 +199,7 @@ Bash(git worktree list:*),Bash(ps:*),Bash(lsof:*),Bash(xcrun simctl list:*)",
         let args = claude_args(&AiConfig::default(), "hi", "/w");
         let pos = |flag: &str| args.iter().position(|a| a == flag).unwrap();
         let allowed = &args[pos("--allowedTools") + 1];
-        for bad in ["sqlite3", "find", "git log", "git branch", "plutil", "Bash(file", "Edit", "Write", "Bash(git:", "Bash(*"] {
+        for bad in ["sqlite3", "find", "git status", "git log", "git branch", "plutil", "Bash(file", "Edit", "Write", "Bash(git:", "Bash(*"] {
             assert!(!allowed.contains(bad), "{bad} is allowed");
         }
         assert_eq!(args[pos("--tools") + 1], "Read,Glob,Grep,Bash");

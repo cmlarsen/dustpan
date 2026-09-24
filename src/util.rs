@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -98,6 +99,56 @@ fn read_all(mut r: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
     rx
 }
 
+static CHILD_GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
+
+struct GroupGuard(Option<usize>);
+
+impl GroupGuard {
+    fn register(pgid: libc::pid_t) -> Self {
+        if pgid <= 0 {
+            return GroupGuard(None);
+        }
+        GroupGuard(
+            CHILD_GROUPS
+                .iter()
+                .position(|slot| slot.compare_exchange(0, pgid, Ordering::SeqCst, Ordering::SeqCst).is_ok()),
+        )
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        if let Some(i) = self.0 {
+            CHILD_GROUPS[i].store(0, Ordering::SeqCst);
+        }
+    }
+}
+
+#[cfg(test)]
+fn registered_groups() -> Vec<libc::pid_t> {
+    CHILD_GROUPS.iter().map(|slot| slot.load(Ordering::SeqCst)).filter(|&g| g > 0).collect()
+}
+
+extern "C" fn kill_groups_and_exit(_signal: libc::c_int) {
+    for slot in &CHILD_GROUPS {
+        let pgid = slot.load(Ordering::SeqCst);
+        if pgid > 0 {
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
+    }
+    unsafe { libc::_exit(130) }
+}
+
+pub fn kill_children_on_interrupt() {
+    let handler = kill_groups_and_exit as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    unsafe {
+        libc::signal(libc::SIGINT, handler);
+        libc::signal(libc::SIGTERM, handler);
+    }
+}
+
 fn kill_group(child: &Child) {
     if let Ok(pgid) = libc::pid_t::try_from(child.id()) {
         unsafe {
@@ -125,6 +176,7 @@ pub fn run_with(
         cmd.current_dir(dir);
     }
     let mut child = cmd.spawn().ok()?;
+    let _group = GroupGuard::register(libc::pid_t::try_from(child.id()).unwrap_or(0));
     if let (Some(mut pipe), Some(input)) = (child.stdin.take(), stdin) {
         let input = input.to_vec();
         thread::spawn(move || {
@@ -237,6 +289,37 @@ mod tests {
         assert!(out.ok);
         assert_eq!(out.stdout.trim(), "hi");
         assert!(start.elapsed() < Duration::from_secs(2), "took {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn group_guard_registers_until_dropped() {
+        let pgid = 999_999_001;
+        {
+            let _g = GroupGuard::register(pgid);
+            assert!(registered_groups().contains(&pgid));
+        }
+        assert!(!registered_groups().contains(&pgid));
+        let _none = GroupGuard::register(0);
+        assert!(!registered_groups().contains(&0));
+    }
+
+    #[test]
+    fn run_registers_the_child_group_only_while_it_runs() {
+        let d = tempfile::tempdir().unwrap();
+        let pid_file = d.path().join("pid");
+        let script = format!("echo $$ > '{}'; sleep 1", pid_file.display());
+        let handle = thread::spawn(move || run("sh", &["-c", &script], None, Duration::from_secs(5)));
+        let start = Instant::now();
+        let pgid = loop {
+            if let Some(p) = std::fs::read_to_string(&pid_file).ok().and_then(|s| s.trim().parse::<i32>().ok()) {
+                break p;
+            }
+            assert!(start.elapsed() < Duration::from_secs(3));
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(registered_groups().contains(&pgid));
+        assert!(handle.join().unwrap().unwrap().ok);
+        assert!(!registered_groups().contains(&pgid));
     }
 
     #[test]
