@@ -14,6 +14,8 @@ brew install cmlarsen/tap/dustpan
 cargo install dustpan
 ```
 
+The command is `dp`. Homebrew also installs it as `dustpan`; `cargo install` provides `dp` only.
+
 Your terminal needs Full Disk Access (System Settings → Privacy & Security) to size other apps' containers in `~/Library/Containers`. Without it, macOS may ask for access app by app, and anything Dustpan cannot read is left out of the totals.
 
 ## Use

@@ -21,3 +21,6 @@ install-updater = false
 tap = "cmlarsen/homebrew-tap"
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
+
+[dist.bin-aliases]
+dp = ["dustpan"]
