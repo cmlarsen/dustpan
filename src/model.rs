@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::path::PathBuf;
+
+pub const PROTECTED_REASON: &str = "protected by you (pin or config)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -18,6 +21,15 @@ impl Verdict {
             Verdict::Review => "REVIEW",
             Verdict::Active => "IN USE",
             Verdict::Keep => "KEEP",
+        }
+    }
+
+    pub fn rank(self) -> u8 {
+        match self {
+            Verdict::Safe => 0,
+            Verdict::Review => 1,
+            Verdict::Active => 2,
+            Verdict::Keep => 3,
         }
     }
 }
@@ -146,9 +158,14 @@ impl Action {
                     .chain(args.iter().map(|a| shell_quote(a)))
                     .collect::<Vec<_>>()
                     .join(" ");
-                match cwd {
+                let cmd = match cwd {
                     Some(dir) => format!("cd {} && {}", shell_quote(&dir.display().to_string()), cmd),
                     None => cmd,
+                };
+                if program == "git" && args.iter().map(String::as_str).eq(["worktree", "prune"]) {
+                    format!("{cmd} (repo-wide: drops every missing worktree of this repo)")
+                } else {
+                    cmd
                 }
             }
         }
@@ -216,6 +233,21 @@ impl Item {
     pub fn cleanable(&self) -> bool {
         !self.action.is_none() && self.effective_verdict() != Verdict::Keep
     }
+
+    pub fn set_protected(&mut self, protected: bool) {
+        self.protected = protected;
+        self.reasons.retain(|r| r != PROTECTED_REASON);
+        if protected {
+            self.reasons.insert(0, PROTECTED_REASON.into());
+        }
+    }
+
+    pub fn listing_order(&self, other: &Item) -> Ordering {
+        self.effective_verdict()
+            .rank()
+            .cmp(&other.effective_verdict().rank())
+            .then(other.reclaimable.max(other.bytes / 8).cmp(&self.reclaimable.max(self.bytes / 8)))
+    }
 }
 
 #[cfg(test)]
@@ -239,8 +271,49 @@ mod tests {
 
     #[test]
     fn describe_run_with_cwd() {
+        let a = Action::run("git", &["worktree", "remove", "/r/x-wt"], Some("/r/x".into()));
+        assert_eq!(a.describe(), "cd /r/x && git worktree remove /r/x-wt");
+    }
+
+    #[test]
+    fn describe_says_worktree_prune_is_repo_wide() {
         let a = Action::run("git", &["worktree", "prune"], Some("/r/x".into()));
-        assert_eq!(a.describe(), "cd /r/x && git worktree prune");
+        assert_eq!(
+            a.describe(),
+            "cd /r/x && git worktree prune (repo-wide: drops every missing worktree of this repo)"
+        );
+    }
+
+    #[test]
+    fn set_protected_keeps_one_reason_at_the_top() {
+        let mut item = Item::new(Category::DerivedData, "x", "/tmp/x");
+        item.reasons = vec!["project gone".into()];
+        item.set_protected(true);
+        item.set_protected(true);
+        assert_eq!(item.reasons, vec![PROTECTED_REASON.to_string(), "project gone".into()]);
+        item.set_protected(false);
+        assert!(!item.protected);
+        assert_eq!(item.reasons, vec!["project gone".to_string()]);
+    }
+
+    #[test]
+    fn listing_order_puts_safe_first_then_bigger() {
+        let mk = |v: Verdict, bytes: u64| {
+            let mut i = Item::new(Category::DerivedData, "x", format!("/tmp/{bytes}"));
+            i.verdict = v;
+            i.bytes = bytes;
+            i.reclaimable = bytes;
+            i
+        };
+        let mut pinned = mk(Verdict::Safe, 900);
+        pinned.protected = true;
+        let mut items = [mk(Verdict::Keep, 500), pinned, mk(Verdict::Review, 10), mk(Verdict::Safe, 1), mk(Verdict::Safe, 50)];
+        items.sort_by(Item::listing_order);
+        let got: Vec<(Verdict, u64)> = items.iter().map(|i| (i.effective_verdict(), i.bytes)).collect();
+        assert_eq!(
+            got,
+            vec![(Verdict::Safe, 50), (Verdict::Safe, 1), (Verdict::Review, 10), (Verdict::Keep, 900), (Verdict::Keep, 500)]
+        );
     }
 
     #[test]

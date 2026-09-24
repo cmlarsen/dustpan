@@ -44,7 +44,7 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
     let start = Instant::now();
     let home = home();
     let state = State::load();
-    let protector = Protector::new(&cfg.protect, state.pins.clone(), &home);
+    let protector = Protector::new(&cfg.protect, state.pins.clone(), &home).unwrap_or_else(|_| Protector::everything());
     let send = |m: ScanMsg| {
         let _ = tx.send(m);
     };
@@ -91,11 +91,9 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
         if !keep_item(&item, min_bytes) {
             return;
         }
-        crate::actions::apply_preflight(&mut item, &ctx.home, &ctx.roots);
-        item.protected = protector.is_protected(&item);
-        if item.protected {
-            item.reasons.insert(0, "protected by you (pin or config)".into());
-        }
+        let protected = protector.is_protected(&item);
+        crate::actions::apply_preflight(&mut item, &ctx.home, &ctx.roots, &protector);
+        item.set_protected(protected);
         send(ScanMsg::Item(Box::new(item)));
     };
 
@@ -147,9 +145,5 @@ pub fn collect(cfg: Config, mut on_progress: impl FnMut(&str)) -> (Vec<Item>, f6
 }
 
 pub fn sort_items(items: &mut [Item]) {
-    items.sort_by(|a, b| {
-        a.effective_verdict()
-            .cmp(&b.effective_verdict())
-            .then(b.reclaimable.max(b.bytes / 8).cmp(&a.reclaimable.max(a.bytes / 8)))
-    });
+    items.sort_by(Item::listing_order);
 }
