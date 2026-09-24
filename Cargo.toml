@@ -1,0 +1,39 @@
+[package]
+name = "dustpan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Find and clean the dev leftovers eating your Mac's disk and memory: stale worktrees, orphaned DerivedData, simulators, caches"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/cmlarsen/dustpan"
+homepage = "https://github.com/cmlarsen/dustpan"
+readme = "README.md"
+keywords = ["cleanup", "disk-space", "xcode", "git-worktree", "tui"]
+categories = ["command-line-utilities", "development-tools", "filesystem"]
+exclude = [".github/"]
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", features = ["serde"] }
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+globset = "0.4.20"
+jwalk = "0.9.0"
+libc = "0.2.189"
+plist = "1.10.1"
+ratatui = "0.30.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.6"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[[bin]]
+name = "dp"
+path = "src/main.rs"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
