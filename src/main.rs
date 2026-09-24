@@ -52,8 +52,15 @@ enum Cmd {
     /// Ask Claude or Codex what a folder is and whether it can go
     Ask {
         path: PathBuf,
+        /// claude or codex (defaults to the TUI's last choice, then the config)
         #[arg(long)]
         provider: Option<String>,
+        /// Model ID for that provider
+        #[arg(long)]
+        model: Option<String>,
+        /// low, medium, high, or xhigh
+        #[arg(long)]
+        effort: Option<String>,
     },
     /// Print the config file location
     Config,
@@ -104,12 +111,23 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Clean { yes, dry_run } => clean_safe(cfg, yes, dry_run),
-        Cmd::Ask { path, provider } => {
+        Cmd::Ask { path, provider, model, effort } => {
             let home = util::home();
             let path = std::fs::canonicalize(&path).unwrap_or(path);
             let mut ai_cfg = cfg.ai.clone();
+            state::State::load().ai.apply(&mut ai_cfg);
             if let Some(p) = provider {
                 ai_cfg.provider = p;
+            }
+            if let Some(m) = model {
+                if ai_cfg.provider == "codex" {
+                    ai_cfg.codex_model = m;
+                } else {
+                    ai_cfg.claude_model = m;
+                }
+            }
+            if let Some(e) = effort {
+                ai_cfg.effort = e;
             }
             let stats = size::dir_stats(&path);
             let mut item = Item::new(Category::AppData, path.display().to_string(), &path);

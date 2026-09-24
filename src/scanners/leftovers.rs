@@ -43,8 +43,9 @@ fn codex_staging(ctx: &Ctx, emit: Emit) {
             oldest.map(|t| t.format("%Y-%m-%d").to_string()).unwrap_or_default()
         ),
         "folders from the last day are left alone in case an upgrade is running".into(),
+        "most are throwaway git clones of plugin marketplaces, so the git-repo guard is relaxed for them".into(),
     ];
-    item.action = Action::Delete { paths: stale };
+    item.action = Action::delete_clones(stale);
     emit(item);
 }
 
@@ -88,7 +89,7 @@ fn unfinished_downloads(ctx: &Ctx, emit: Emit) {
             format!("{} interrupted CFNetwork downloads older than a day", files.len()),
             "the app downloads again if it still needs the file".into(),
         ];
-        item.action = Action::Delete { paths: files };
+        item.action = Action::delete_all(files);
         emit(item);
     }
 }

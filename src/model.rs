@@ -28,21 +28,27 @@ pub enum Category {
     Worktree,
     DerivedData,
     Simulator,
+    SimRuntime,
     DeviceSupport,
     NodeModules,
     PackageCache,
+    Docker,
+    Download,
     Leftover,
     AppData,
 }
 
 impl Category {
-    pub const ALL: [Category; 8] = [
+    pub const ALL: [Category; 11] = [
         Category::Worktree,
         Category::DerivedData,
         Category::Simulator,
+        Category::SimRuntime,
         Category::DeviceSupport,
         Category::NodeModules,
         Category::PackageCache,
+        Category::Docker,
+        Category::Download,
         Category::Leftover,
         Category::AppData,
     ];
@@ -52,9 +58,12 @@ impl Category {
             Category::Worktree => "worktree",
             Category::DerivedData => "derived data",
             Category::Simulator => "simulator",
+            Category::SimRuntime => "sim runtime",
             Category::DeviceSupport => "device support",
             Category::NodeModules => "node_modules",
             Category::PackageCache => "pkg cache",
+            Category::Docker => "docker",
+            Category::Download => "download",
             Category::Leftover => "leftover",
             Category::AppData => "app data",
         }
@@ -65,9 +74,12 @@ impl Category {
             Category::Worktree => "worktree",
             Category::DerivedData => "derived_data",
             Category::Simulator => "simulator",
+            Category::SimRuntime => "sim_runtime",
             Category::DeviceSupport => "device_support",
             Category::NodeModules => "node_modules",
             Category::PackageCache => "package_cache",
+            Category::Docker => "docker",
+            Category::Download => "download",
             Category::Leftover => "leftover",
             Category::AppData => "app_data",
         }
@@ -80,6 +92,8 @@ pub enum Action {
     None,
     Delete {
         paths: Vec<PathBuf>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        allow_git_clones: bool,
     },
     Run {
         program: String,
@@ -90,8 +104,20 @@ pub enum Action {
 
 impl Action {
     pub fn delete(path: impl Into<PathBuf>) -> Self {
+        Action::delete_all(vec![path.into()])
+    }
+
+    pub fn delete_all(paths: Vec<PathBuf>) -> Self {
         Action::Delete {
-            paths: vec![path.into()],
+            paths,
+            allow_git_clones: false,
+        }
+    }
+
+    pub fn delete_clones(paths: Vec<PathBuf>) -> Self {
+        Action::Delete {
+            paths,
+            allow_git_clones: true,
         }
     }
 
@@ -106,7 +132,7 @@ impl Action {
     pub fn describe(&self) -> String {
         match self {
             Action::None => "no automatic action; inspect it yourself".into(),
-            Action::Delete { paths } => match paths.as_slice() {
+            Action::Delete { paths, .. } => match paths.as_slice() {
                 [] => "nothing to delete".into(),
                 [one] => format!("rm -rf {}", shell_quote(&one.display().to_string())),
                 [first, rest @ ..] => format!(
@@ -207,9 +233,7 @@ mod tests {
 
     #[test]
     fn describe_counts_extra_paths() {
-        let a = Action::Delete {
-            paths: vec!["/a/b".into(), "/a/c".into(), "/a/d".into()],
-        };
+        let a = Action::delete_all(vec!["/a/b".into(), "/a/c".into(), "/a/d".into()]);
         assert_eq!(a.describe(), "rm -rf /a/b (+2 more)");
     }
 

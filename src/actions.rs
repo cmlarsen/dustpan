@@ -1,4 +1,4 @@
-use crate::model::{Action, Item};
+use crate::model::{Action, Item, Verdict};
 use crate::state::{append_history, HistoryEntry};
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -21,7 +21,7 @@ const FORBIDDEN: &[&str] = &[
     "Library/Photos",
 ];
 
-pub fn guard_delete(p: &Path, home: &Path, roots: &[PathBuf]) -> Result<()> {
+pub fn guard_delete(p: &Path, home: &Path, roots: &[PathBuf], allow_git_clones: bool) -> Result<()> {
     if !p.is_absolute() {
         bail!("refusing relative path {}", p.display());
     }
@@ -41,10 +41,38 @@ pub fn guard_delete(p: &Path, home: &Path, roots: &[PathBuf]) -> Result<()> {
     if let Some(r) = roots.iter().find(|r| r.starts_with(p)) {
         bail!("refusing {}: it contains project root {}", p.display(), r.display());
     }
-    if p.join(".git").is_dir() {
+    if !allow_git_clones && p.join(".git").is_dir() {
         bail!("refusing {}: it is a git repository", p.display());
     }
     Ok(())
+}
+
+pub fn preflight(action: &Action, home: &Path, roots: &[PathBuf]) -> Result<()> {
+    match action {
+        Action::None => Ok(()),
+        Action::Delete { paths, allow_git_clones } => {
+            for p in paths {
+                guard_delete(p, home, roots, *allow_git_clones)?;
+            }
+            Ok(())
+        }
+        Action::Run { program, .. } => {
+            if crate::util::which(program).is_none() {
+                bail!("{program} is not on PATH");
+            }
+            Ok(())
+        }
+    }
+}
+
+pub fn apply_preflight(item: &mut Item, home: &Path, roots: &[PathBuf]) {
+    if let Err(e) = preflight(&item.action, home, roots) {
+        if item.verdict == Verdict::Safe {
+            item.verdict = Verdict::Review;
+        }
+        item.reasons.push(format!("Dustpan won't clean this automatically: {e:#}"));
+        item.action = Action::None;
+    }
 }
 
 fn remove(p: &Path) -> Result<()> {
@@ -59,9 +87,9 @@ fn remove(p: &Path) -> Result<()> {
 pub fn execute(action: &Action, home: &Path, roots: &[PathBuf]) -> Result<String> {
     match action {
         Action::None => bail!("this item has no automatic action"),
-        Action::Delete { paths } => {
+        Action::Delete { paths, allow_git_clones } => {
             for p in paths {
-                guard_delete(p, home, roots)?;
+                guard_delete(p, home, roots, *allow_git_clones)?;
             }
             for p in paths {
                 remove(p)?;
@@ -134,7 +162,7 @@ mod tests {
     fn guard_rules() {
         let home = Path::new("/Users/me");
         let roots = vec![PathBuf::from("/Users/me/Work")];
-        let ok = |p: &str| guard_delete(Path::new(p), home, &roots).is_ok();
+        let ok = |p: &str| guard_delete(Path::new(p), home, &roots, false).is_ok();
         assert!(ok("/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc"));
         assert!(ok("/Users/me/.cache/uv"));
         assert!(!ok("/Users/me/Library"));
@@ -153,10 +181,42 @@ mod tests {
         let home = d.path();
         let roots = vec![home.join("Work/Projects")];
         std::fs::create_dir_all(home.join("Other/repo/.git")).unwrap();
-        assert!(guard_delete(&home.join("Work/Projects"), home, &roots).is_err());
-        assert!(guard_delete(&home.join("Work"), home, &roots).is_err());
-        assert!(guard_delete(&home.join("Other/repo"), home, &roots).is_err());
-        assert!(guard_delete(&home.join("Other/repo/node_modules"), home, &roots).is_ok());
+        assert!(guard_delete(&home.join("Work/Projects"), home, &roots, false).is_err());
+        assert!(guard_delete(&home.join("Work"), home, &roots, false).is_err());
+        assert!(guard_delete(&home.join("Other/repo"), home, &roots, false).is_err());
+        assert!(guard_delete(&home.join("Other/repo/node_modules"), home, &roots, false).is_ok());
+        assert!(guard_delete(&home.join("Other/repo"), home, &roots, true).is_ok());
+        assert!(guard_delete(&home.join("Work"), home, &roots, true).is_err(), "clones flag never unlocks project roots");
+    }
+
+    #[test]
+    fn preflight_downgrades_items_the_guard_would_refuse() {
+        use crate::model::Category;
+        let d = tempfile::tempdir().unwrap();
+        let home = d.path();
+        let repo = home.join("Stuff/clone");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        let mut refused = Item::new(Category::Leftover, "x", &repo);
+        refused.verdict = Verdict::Safe;
+        refused.action = Action::delete_all(vec![repo.clone()]);
+        apply_preflight(&mut refused, home, &[]);
+        assert_eq!(refused.verdict, Verdict::Review);
+        assert!(refused.action.is_none());
+        assert!(refused.reasons.last().unwrap().contains("git repository"));
+
+        let mut clones = Item::new(Category::Leftover, "x", &repo);
+        clones.verdict = Verdict::Safe;
+        clones.action = Action::delete_clones(vec![repo.clone()]);
+        apply_preflight(&mut clones, home, &[]);
+        assert_eq!(clones.verdict, Verdict::Safe);
+        assert!(!clones.action.is_none());
+
+        let mut missing_tool = Item::new(Category::PackageCache, "x", &repo);
+        missing_tool.verdict = Verdict::Safe;
+        missing_tool.action = Action::run("definitely-not-a-real-tool-xyz", &[], None);
+        apply_preflight(&mut missing_tool, home, &[]);
+        assert_eq!(missing_tool.verdict, Verdict::Review);
     }
 
     #[test]
@@ -168,9 +228,7 @@ mod tests {
         std::fs::write(dir.join("sub/f"), b"x").unwrap();
         let file = home.join("Library/Caches/file.tmp");
         std::fs::write(&file, b"x").unwrap();
-        let action = Action::Delete {
-            paths: vec![dir.clone(), file.clone(), home.join("Library/Caches/missing")],
-        };
+        let action = Action::delete_all(vec![dir.clone(), file.clone(), home.join("Library/Caches/missing")]);
         execute(&action, home, &[]).unwrap();
         assert!(!dir.exists());
         assert!(!file.exists());
@@ -182,9 +240,7 @@ mod tests {
         let home = d.path();
         let a = home.join("Library/Caches/a");
         std::fs::create_dir_all(&a).unwrap();
-        let action = Action::Delete {
-            paths: vec![a.clone(), home.join("Documents/x")],
-        };
+        let action = Action::delete_all(vec![a.clone(), home.join("Documents/x")]);
         assert!(execute(&action, home, &[]).is_err());
         assert!(a.exists(), "first path must survive when a later one is refused");
     }

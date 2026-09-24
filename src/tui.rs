@@ -122,8 +122,36 @@ impl Sort {
 enum Modal {
     None,
     Help,
-    ConfirmClean(Vec<String>),
+    ConfirmClean { ids: Vec<String>, skipped: Vec<String> },
     ConfirmKill(Vec<(u32, String)>),
+    AiPicker(usize),
+}
+
+const AGENTS: &[&str] = &["claude", "codex"];
+const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
+const CLAUDE_MODELS: &[&str] = &["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"];
+const CODEX_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gpt-reserve"];
+
+fn with_current(current: &str, presets: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    if !current.is_empty() {
+        v.push(current.to_string());
+    }
+    for p in presets {
+        if !v.iter().any(|x| x == p) {
+            v.push(p.to_string());
+        }
+    }
+    v
+}
+
+fn cycle(list: &[String], current: &str, dir: isize) -> String {
+    if list.is_empty() {
+        return current.to_string();
+    }
+    let pos = list.iter().position(|x| x == current).unwrap_or(0) as isize;
+    let n = list.len() as isize;
+    list[((pos + dir).rem_euclid(n)) as usize].clone()
 }
 
 struct App {
@@ -155,6 +183,9 @@ struct App {
     pending_ai: HashSet<String>,
     cleaning: HashSet<String>,
     freed_session: u64,
+    free_at_start: Option<u64>,
+    range_anchor: Option<String>,
+    persist: bool,
     tick: usize,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
@@ -176,12 +207,19 @@ impl App {
         let (tx, rx) = channel();
         let home = home();
         let roots = resolve_roots(&cfg, &home);
+        let state = State::load();
+        let mut cfg = cfg;
+        state.ai.apply(&mut cfg.ai);
+        let disk = disk_info(&home);
         App {
-            disk: disk_info(&home),
+            free_at_start: disk.as_ref().map(|d| d.free),
+            range_anchor: None,
+            persist: true,
+            disk,
             home,
             roots,
             cfg,
-            state: State::load(),
+            state,
             items: Vec::new(),
             procs: ProcSnapshot::default(),
             history: state::read_history(200),
@@ -424,7 +462,11 @@ impl App {
         match std::mem::replace(&mut self.modal, Modal::None) {
             Modal::None => {}
             Modal::Help => return,
-            Modal::ConfirmClean(ids) => {
+            Modal::AiPicker(row) => {
+                self.picker_key(k, row);
+                return;
+            }
+            Modal::ConfirmClean { ids, .. } => {
                 if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                     self.do_clean(ids);
                 } else {
@@ -442,9 +484,19 @@ impl App {
             }
         }
         self.status.clear();
+        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Esc => {
+                if self.range_anchor.take().is_some() {
+                    self.status = "range cancelled".into();
+                }
+            }
             KeyCode::Char('?') => self.modal = Modal::Help,
+            KeyCode::Char('A') => self.modal = Modal::AiPicker(0),
+            KeyCode::Down | KeyCode::Up if shift => self.mark_and_move(if k.code == KeyCode::Down { 1 } else { -1 }),
+            KeyCode::Char('J') => self.mark_and_move(1),
+            KeyCode::Char('K') => self.mark_and_move(-1),
             KeyCode::Tab => {
                 self.tab = match self.tab {
                     Tab::Disk => Tab::Procs,
@@ -483,6 +535,7 @@ impl App {
 
     fn disk_key(&mut self, k: KeyEvent) {
         match k.code {
+            KeyCode::Char(' ') if self.range_anchor.is_some() => self.toggle_range(),
             KeyCode::Char(' ') => {
                 if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
                     if !self.marked.remove(&id) {
@@ -502,7 +555,22 @@ impl App {
                 self.status = format!("marked {} SAFE items", ids.len());
                 self.marked.extend(ids);
             }
-            KeyCode::Char('u') => self.marked.clear(),
+            KeyCode::Char('*') => {
+                let vis = self.visible();
+                let ids: Vec<String> = vis
+                    .iter()
+                    .map(|&i| &self.items[i])
+                    .filter(|i| i.cleanable())
+                    .map(|i| i.id.clone())
+                    .collect();
+                self.status = format!("marked {} cleanable items in view", ids.len());
+                self.marked.extend(ids);
+            }
+            KeyCode::Char('v') => self.toggle_range(),
+            KeyCode::Char('u') => {
+                self.marked.clear();
+                self.range_anchor = None;
+            }
             KeyCode::Char('d') => {
                 let ids: Vec<String> = if self.marked.is_empty() {
                     self.selected_item().map(|i| vec![i.id.clone()]).unwrap_or_default()
@@ -526,7 +594,7 @@ impl App {
                         format!("can't clean {} (KEEP, pinned, or no action)", blocked.join(", "))
                     };
                 } else {
-                    self.modal = Modal::ConfirmClean(ok);
+                    self.modal = Modal::ConfirmClean { ids: ok, skipped: blocked };
                 }
             }
             KeyCode::Char('x') => {
@@ -578,8 +646,131 @@ impl App {
         }
     }
 
+    fn mark_and_move(&mut self, delta: isize) {
+        match self.tab {
+            Tab::Disk => {
+                if let Some(id) = self.selected_item().map(|i| i.id.clone()) {
+                    self.marked.insert(id);
+                }
+            }
+            Tab::Procs => {
+                if let Some(pid) = self.selected_proc().map(|p| p.pid) {
+                    self.marked_pids.insert(pid);
+                }
+            }
+            Tab::History => return,
+        }
+        self.move_sel(delta);
+    }
+
+    fn range_ids(&self) -> Vec<String> {
+        let Some(anchor) = &self.range_anchor else { return Vec::new() };
+        let vis = self.visible();
+        let Some(a) = vis.iter().position(|&i| &self.items[i].id == anchor) else { return Vec::new() };
+        let b = self.selected_index(&vis).unwrap_or(0);
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        vis[lo..=hi].iter().map(|&i| self.items[i].id.clone()).collect()
+    }
+
+    fn toggle_range(&mut self) {
+        if self.range_anchor.is_none() {
+            self.range_anchor = self.selected_item().map(|i| i.id.clone());
+            self.status = "range started: move, then v or space marks every row in between (esc cancels)".into();
+            return;
+        }
+        let ids = self.range_ids();
+        self.status = format!("marked {} rows", ids.len());
+        self.marked.extend(ids);
+        self.range_anchor = None;
+    }
+
+    fn picker_key(&mut self, k: KeyEvent, row: usize) {
+        let ai = &mut self.cfg.ai;
+        let dir = match k.code {
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => 1,
+            KeyCode::Left | KeyCode::Char('h') => -1,
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.modal = Modal::AiPicker((row + 1).min(2));
+                return;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.modal = Modal::AiPicker(row.saturating_sub(1));
+                return;
+            }
+            _ => {
+                self.state.ai = crate::state::AiChoice {
+                    provider: Some(ai.provider.clone()),
+                    claude_model: Some(ai.claude_model.clone()),
+                    codex_model: Some(ai.codex_model.clone()),
+                    effort: Some(ai.effort.clone()),
+                };
+                if self.persist {
+                    let _ = self.state.save();
+                }
+                self.status = format!("AI: {} · saved for next time", self.ai_label());
+                return;
+            }
+        };
+        match row {
+            0 => ai.provider = cycle(&with_current("", AGENTS), &ai.provider, dir),
+            1 if ai.provider == "codex" => {
+                ai.codex_model = cycle(&with_current(&ai.codex_model, CODEX_MODELS), &ai.codex_model, dir)
+            }
+            1 => ai.claude_model = cycle(&with_current(&ai.claude_model, CLAUDE_MODELS), &ai.claude_model, dir),
+            _ => ai.effort = cycle(&with_current("", EFFORTS), &ai.effort, dir),
+        }
+        self.modal = Modal::AiPicker(row);
+    }
+
+    fn ai_label(&self) -> String {
+        let ai = &self.cfg.ai;
+        let model = if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model };
+        let model = if model.is_empty() { "default model" } else { model.as_str() };
+        let effort = if ai.effort.is_empty() { "default effort" } else { ai.effort.as_str() };
+        format!("{} {model} · {effort}", ai.provider)
+    }
+
+    fn draw_ai_picker(&self, f: &mut Frame, row: usize) {
+        let ai = &self.cfg.ai;
+        let model = if ai.provider == "codex" { &ai.codex_model } else { &ai.claude_model };
+        let rows = [("agent", ai.provider.as_str()), ("model", model.as_str()), ("effort", ai.effort.as_str())];
+        let mut lines = vec![
+            Line::from("Who answers when you press x on an item or process."),
+            Line::from(""),
+        ];
+        for (i, (label, value)) in rows.iter().enumerate() {
+            let selected = i == row;
+            let style = if selected {
+                Style::new().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            let value = if value.is_empty() { "(CLI default)" } else { value };
+            lines.push(Line::from(vec![
+                Span::raw(if selected { " ▸ " } else { "   " }),
+                Span::styled(format!("{label:<8}"), Style::new().fg(Color::DarkGray)),
+                Span::styled(format!(" ◂ {value} ▸ "), style),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Models beyond these presets: set ai.claude_model / ai.codex_model in the config.",
+            Style::new().fg(Color::DarkGray),
+        )));
+        let keys = Line::from(Span::styled(
+            "↑↓ choose · ←→ change · any other key saves and closes",
+            Style::new().fg(Color::DarkGray),
+        ));
+        modal(f, " AI agent ", Text::from(lines), keys, 72);
+    }
+
     fn proc_key(&mut self, k: KeyEvent) {
         match k.code {
+            KeyCode::Char('*') => {
+                let pids: Vec<u32> = self.procs.dev.iter().map(|p| p.pid).collect();
+                self.status = format!("marked {} processes", pids.len());
+                self.marked_pids.extend(pids);
+            }
             KeyCode::Char(' ') => {
                 if let Some(pid) = self.selected_proc().map(|p| p.pid) {
                     if !self.marked_pids.remove(&pid) {
@@ -588,8 +779,11 @@ impl App {
                     self.move_sel(1);
                 }
             }
-            KeyCode::Char('u') => self.marked_pids.clear(),
-            KeyCode::Char('d') | KeyCode::Char('K') => {
+            KeyCode::Char('u') => {
+                self.marked_pids.clear();
+                self.range_anchor = None;
+            }
+            KeyCode::Char('d') => {
                 let pids: Vec<(u32, String)> = if self.marked_pids.is_empty() {
                     self.selected_proc().map(|p| vec![(p.pid, p.name.clone())]).unwrap_or_default()
                 } else {
@@ -739,7 +933,8 @@ impl App {
         match &self.modal {
             Modal::None => {}
             Modal::Help => draw_help(f),
-            Modal::ConfirmClean(ids) => self.draw_confirm_clean(f, ids),
+            Modal::ConfirmClean { ids, skipped } => self.draw_confirm_clean(f, ids, skipped),
+            Modal::AiPicker(row) => self.draw_ai_picker(f, *row),
             Modal::ConfirmKill(pids) => self.draw_confirm_kill(f, pids),
         }
     }
@@ -789,6 +984,14 @@ impl App {
         } else if let Some(s) = self.scan_secs {
             l2.push(Span::styled(format!("scanned in {s:.0}s"), Style::new().fg(Color::DarkGray)));
         }
+        if let (Some(start), Some(d)) = (self.free_at_start, &self.disk)
+            && d.free > start + (100 << 20)
+        {
+            l2.push(Span::styled(
+                format!("   free {} → {}", human(start), human(d.free)),
+                Style::new().fg(Color::Green),
+            ));
+        }
         if self.freed_session > 0 {
             l2.push(Span::styled(
                 format!("   freed {} this session", human(self.freed_session)),
@@ -808,17 +1011,28 @@ impl App {
         };
         let vis = self.visible();
         let now = Utc::now();
+        let range: HashSet<String> = self.range_ids().into_iter().collect();
         let rows: Vec<Row> = vis
             .iter()
             .map(|&i| {
                 let it = &self.items[i];
                 let v = it.effective_verdict();
+                let marked = self.marked.contains(&it.id);
                 let mark = if self.cleaning.contains(&it.id) {
                     SPINNER[self.tick % SPINNER.len()]
-                } else if self.marked.contains(&it.id) {
-                    "●"
+                } else if marked {
+                    "✓"
+                } else if range.contains(&it.id) {
+                    "┃"
                 } else {
                     " "
+                };
+                let row_style = if marked {
+                    Style::new().bg(Color::Rgb(28, 52, 34))
+                } else if range.contains(&it.id) {
+                    Style::new().bg(Color::Rgb(40, 40, 24))
+                } else {
+                    Style::new()
                 };
                 let mut name = it.name.clone();
                 if self.pending_ai.contains(&it.id) {
@@ -835,6 +1049,7 @@ impl App {
                     Cell::from(it.category.label()).style(Style::new().fg(Color::Blue)),
                     Cell::from(name),
                 ])
+                .style(row_style)
             })
             .collect();
         let mut title = format!(
@@ -952,7 +1167,7 @@ impl App {
             }
         } else {
             lines.push(Line::from(Span::styled(
-                format!("press x to ask {} about this", self.cfg.ai.provider),
+                format!("press x to ask {} about this (A to change)", self.ai_label()),
                 Style::new().fg(Color::DarkGray),
             )));
         }
@@ -1100,17 +1315,32 @@ impl App {
         } else if !self.status.is_empty() {
             Line::from(Span::styled(format!(" {}", self.status), Style::new().fg(Color::Yellow)))
         } else {
+            let marks = match self.tab {
+                Tab::Disk if !self.marked.is_empty() => {
+                    let bytes: u64 = self.items.iter().filter(|i| self.marked.contains(&i.id)).map(|i| i.reclaimable).sum();
+                    Some(format!(" {} marked ({}) · d clean · u clear ", self.marked.len(), human(bytes)))
+                }
+                Tab::Procs if !self.marked_pids.is_empty() => {
+                    Some(format!(" {} marked · d kill · u clear ", self.marked_pids.len()))
+                }
+                _ => None,
+            };
             let hints = match self.tab {
-                Tab::Disk => "space mark · a mark SAFE · d clean · x ask AI · p pin · o reveal · f filter · c kind · s sort · / search · r rescan · ? help · q quit",
-                Tab::Procs => "space mark · d kill · x ask AI · r refresh · tab switch · ? help · q quit",
+                Tab::Disk => "space/J/K/v mark · a SAFE · * all · d clean · x ask · A agent · p pin · o reveal · f c s / filter · r rescan · ? help · q quit",
+                Tab::Procs => "space/J/K mark · * all · d kill · x ask · A agent · r refresh · ? help · q quit",
                 Tab::History => "r reload · tab switch · q quit",
             };
-            Line::from(Span::styled(format!(" {hints}"), Style::new().fg(Color::DarkGray)))
+            let mut spans = Vec::new();
+            if let Some(m) = marks {
+                spans.push(Span::styled(m, Style::new().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)));
+            }
+            spans.push(Span::styled(format!(" {hints}"), Style::new().fg(Color::DarkGray)));
+            Line::from(spans)
         };
         f.render_widget(Paragraph::new(line), area);
     }
 
-    fn draw_confirm_clean(&self, f: &mut Frame, ids: &[String]) {
+    fn draw_confirm_clean(&self, f: &mut Frame, ids: &[String], skipped: &[String]) {
         let items: Vec<&Item> = ids
             .iter()
             .filter_map(|id| self.items.iter().find(|i| &i.id == id))
@@ -1124,6 +1354,13 @@ impl App {
             )),
             Line::from(""),
         ];
+        if !skipped.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("{} marked item(s) are skipped: KEEP, pinned, or no automatic action.", skipped.len()),
+                Style::new().fg(Color::Magenta),
+            )));
+            lines.push(Line::from(""));
+        }
         if not_safe > 0 {
             lines.push(Line::from(Span::styled(
                 format!("⚠ {not_safe} of these are not marked SAFE. Read their details first."),
@@ -1131,29 +1368,22 @@ impl App {
             )));
             lines.push(Line::from(""));
         }
-        for i in items.iter().take(14) {
+        let home = self.home.display().to_string();
+        for i in items.iter().take(12) {
             let v = i.effective_verdict();
             lines.push(Line::from(vec![
                 Span::styled(format!("{:<6} ", v.label()), verdict_style(v)),
                 Span::raw(format!("{:>7}  {}", human(i.reclaimable), i.name)),
             ]));
             lines.push(Line::from(Span::styled(
-                format!("         $ {}", i.action.describe()),
+                format!("         $ {}", i.action.describe().replace(&home, "~")),
                 Style::new().fg(Color::DarkGray),
             )));
         }
-        if items.len() > 14 {
-            lines.push(Line::from(format!("… and {} more", items.len() - 14)));
+        if items.len() > 12 {
+            lines.push(Line::from(format!("… and {} more", items.len() - 12)));
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(" y ", Style::new().fg(Color::Black).bg(Color::Green)),
-            Span::raw(" clean   "),
-            Span::styled(" any other key ", Style::new().fg(Color::Black).bg(Color::DarkGray)),
-            Span::raw(" cancel"),
-        ]));
-        let h = (lines.len() as u16 + 2).min(f.area().height.saturating_sub(4));
-        modal(f, " Confirm cleanup ", Text::from(lines), 100, h);
+        modal(f, " Confirm cleanup ", Text::from(lines), confirm_keys("clean", Color::Green), 110);
     }
 
     fn draw_confirm_kill(&self, f: &mut Frame, pids: &[(u32, String)]) {
@@ -1167,16 +1397,20 @@ impl App {
         for (pid, name) in pids.iter().take(14) {
             lines.push(Line::from(format!("  pid {pid:<7} {name}")));
         }
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(" y ", Style::new().fg(Color::Black).bg(Color::Red)),
-            Span::raw(" kill   "),
-            Span::styled(" any other key ", Style::new().fg(Color::Black).bg(Color::DarkGray)),
-            Span::raw(" cancel"),
-        ]));
-        let h = lines.len() as u16 + 2;
-        modal(f, " Confirm kill ", Text::from(lines), 70, h);
+        if pids.len() > 14 {
+            lines.push(Line::from(format!("… and {} more", pids.len() - 14)));
+        }
+        modal(f, " Confirm kill ", Text::from(lines), confirm_keys("kill", Color::Red), 70);
     }
+}
+
+fn confirm_keys(verb: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(" y ", Style::new().fg(Color::Black).bg(color).add_modifier(Modifier::BOLD)),
+        Span::raw(format!(" {verb}   ")),
+        Span::styled(" any other key ", Style::new().fg(Color::Black).bg(Color::DarkGray)),
+        Span::raw(" cancel"),
+    ])
 }
 
 fn verdict_style(v: Verdict) -> Style {
@@ -1188,23 +1422,39 @@ fn verdict_style(v: Verdict) -> Style {
     })
 }
 
-fn modal(f: &mut Frame, title: &str, text: Text, w: u16, h: u16) {
+pub fn wrapped_rows(text: &Text, width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    text.lines
+        .iter()
+        .map(|l| {
+            let w = l.width();
+            if w <= width { 1 } else { w.div_ceil(width) + 1 }
+        })
+        .sum::<usize>()
+        .min(u16::MAX as usize) as u16
+}
+
+fn modal(f: &mut Frame, title: &str, body: Text, keys: Line, max_w: u16) {
     let area = f.area();
-    let w = w.min(area.width.saturating_sub(4));
-    let h = h.min(area.height.saturating_sub(2));
+    let w = max_w.min(area.width.saturating_sub(4)).max(20);
+    let inner_w = w.saturating_sub(2);
+    let h = (wrapped_rows(&body, inner_w) + 4).min(area.height.saturating_sub(2)).max(5);
     let rect = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + (area.height - h) / 2,
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
         width: w,
         height: h,
     };
     f.render_widget(Clear, rect);
-    f.render_widget(
-        Paragraph::new(text)
-            .wrap(Wrap { trim: false })
-            .block(Block::bordered().title(title.to_string()).border_style(Style::new().fg(Color::Yellow))),
-        rect,
-    );
+    let block = Block::bordered()
+        .title(title.to_string())
+        .border_style(Style::new().fg(Color::Yellow));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+    let [body_area, _, keys_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), body_area);
+    f.render_widget(Paragraph::new(keys), keys_area);
 }
 
 fn draw_help(f: &mut Frame) {
@@ -1215,16 +1465,23 @@ fn draw_help(f: &mut Frame) {
         ("IN USE", "tied to recent work or a running process"),
         ("KEEP", "uncommitted or unpushed work, dedicated to a live worktree, or pinned by you"),
         ("", ""),
-        ("", "KEYS"),
+        ("", "SELECT"),
+        ("space", "mark / unmark the current row"),
+        ("J K ⇧↑⇧↓", "mark the current row and move (hold to sweep a run of rows)"),
+        ("v", "start a range at this row; v or space again marks everything in between"),
+        ("a / *", "mark every SAFE item in view / every cleanable item in view"),
+        ("u", "clear all marks"),
+        ("d", "clean the marked items (or the current one) after a confirm; kills on Processes"),
+        ("", ""),
+        ("", "OTHER KEYS"),
         ("j/k ↑↓", "move · g/G top/bottom · PgUp/PgDn"),
-        ("space", "mark / unmark · a marks every SAFE item in view · u clears marks"),
-        ("d", "clean marked items (or the selected one) after a confirm; kills on the Processes tab"),
-        ("x / X", "ask Claude or Codex (ai.provider) about the selected / every marked item"),
+        ("x / X", "ask the AI about the current / every marked item"),
+        ("A", "choose the AI agent, model, and effort"),
         ("p", "pin: never clean this item (saved across runs)"),
         ("o / y", "reveal in Finder / copy path"),
         ("f c s /", "filter by state · filter by kind · change sort · search"),
         ("r", "rescan (disk) · refresh (processes)"),
-        ("1 2 3 tab", "switch tabs"),
+        ("1 2 3 tab", "switch tabs · q quits · esc closes dialogs and clears a range"),
         ("", ""),
         ("", "Config: ~/.config/dustpan/config.toml · state + history: ~/.local/state/dustpan"),
     ];
@@ -1241,12 +1498,12 @@ fn draw_help(f: &mut Frame) {
                     "KEEP" => verdict_style(Verdict::Keep),
                     _ => Style::new().fg(Color::Cyan),
                 };
-                Line::from(vec![Span::styled(format!("  {k:<10}"), style), Span::raw(v.to_string())])
+                Line::from(vec![Span::styled(format!("  {k:<11}"), style), Span::raw(v.to_string())])
             }
         })
         .collect();
-    let h = lines.len() as u16 + 2;
-    modal(f, " Help · any key closes ", Text::from(lines), 104, h);
+    let keys = Line::from(Span::styled("any key closes", Style::new().fg(Color::DarkGray)));
+    modal(f, " Help ", Text::from(lines), keys, 108);
 }
 
 fn copy(text: &str) -> bool {
@@ -1269,6 +1526,8 @@ mod tests {
     fn app_with_items() -> App {
         let mut app = App::new(Config::default());
         app.state = State::default();
+        app.persist = false;
+        app.cfg.ai = crate::config::AiConfig::default();
         let mut a = Item::new(Category::DerivedData, "MyApp · ~/gone/ios/MyApp.xcworkspace", "/Users/me/Library/Developer/Xcode/DerivedData/MyApp-a");
         a.verdict = Verdict::Safe;
         a.bytes = 20 << 30;
@@ -1334,7 +1593,7 @@ mod tests {
         key(&mut app, KeyCode::Char('a'));
         assert_eq!(app.marked.len(), 1);
         key(&mut app, KeyCode::Char('d'));
-        assert!(matches!(&app.modal, Modal::ConfirmClean(ids) if ids.len() == 1));
+        assert!(matches!(&app.modal, Modal::ConfirmClean { ids, .. } if ids.len() == 1));
         let screen = render(&app, 180, 45);
         assert!(screen.contains("Confirm cleanup"));
         assert!(screen.contains("free about 20.0G"));
@@ -1342,6 +1601,89 @@ mod tests {
         assert!(matches!(app.modal, Modal::None));
         assert_eq!(app.items.len(), 2);
         assert!(app.cleaning.is_empty());
+    }
+
+    fn safe_item(n: usize) -> Item {
+        let long = format!("/Users/me/.codex/.tmp/marketplaces/.staging/marketplace-upgrade-{n:0>40}");
+        let mut i = Item::new(Category::Leftover, format!("leftover {n} with a fairly long descriptive name"), &long);
+        i.verdict = Verdict::Safe;
+        i.bytes = 1 << 30;
+        i.reclaimable = 1 << 30;
+        i.action = Action::delete_all((0..600).map(|k| PathBuf::from(format!("{long}/{k}"))).collect());
+        i
+    }
+
+    #[test]
+    fn confirm_keys_stay_visible_when_lines_wrap() {
+        let mut app = app_with_items();
+        app.items.extend((0..12).map(safe_item));
+        key(&mut app, KeyCode::Char('a'));
+        key(&mut app, KeyCode::Char('d'));
+        for (w, h) in [(80, 24), (100, 30), (190, 48)] {
+            let screen = render(&app, w, h);
+            assert!(screen.contains(" y  clean"), "confirm keys missing at {w}x{h}\n{screen}");
+        }
+    }
+
+    #[test]
+    fn range_mark_with_v() {
+        let mut app = app_with_items();
+        app.items.extend((0..5).map(safe_item));
+        key(&mut app, KeyCode::Char('g'));
+        key(&mut app, KeyCode::Char('v'));
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Char('j'));
+        }
+        key(&mut app, KeyCode::Char('v'));
+        assert_eq!(app.marked.len(), 4);
+        assert!(app.range_anchor.is_none());
+    }
+
+    #[test]
+    fn shift_j_marks_while_moving_and_star_marks_all_cleanable() {
+        let mut app = app_with_items();
+        app.items.extend((0..3).map(safe_item));
+        key(&mut app, KeyCode::Char('g'));
+        key(&mut app, KeyCode::Char('J'));
+        key(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.marked.len(), 2);
+        key(&mut app, KeyCode::Char('u'));
+        key(&mut app, KeyCode::Char('*'));
+        assert_eq!(app.marked.len(), 4, "KEEP worktree must not be marked");
+    }
+
+    #[test]
+    fn esc_does_not_quit() {
+        let mut app = app_with_items();
+        key(&mut app, KeyCode::Esc);
+        assert!(!app.quit);
+        key(&mut app, KeyCode::Char('q'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn ai_picker_switches_agent_and_effort() {
+        let mut app = app_with_items();
+        key(&mut app, KeyCode::Char('A'));
+        assert!(render(&app, 120, 30).contains("AI agent"));
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.modal, Modal::None));
+        assert_eq!(app.cfg.ai.provider, "codex");
+        assert_eq!(app.cfg.ai.effort, "high");
+        assert_eq!(app.state.ai.provider.as_deref(), Some("codex"));
+        assert_eq!(app.ai_label(), "codex gpt-5.6-sol · high");
+    }
+
+    #[test]
+    fn cycle_wraps() {
+        let list: Vec<String> = ["a", "b", "c"].map(String::from).into();
+        assert_eq!(cycle(&list, "c", 1), "a");
+        assert_eq!(cycle(&list, "a", -1), "c");
+        assert_eq!(with_current("x", &["a", "x"]), vec!["x", "a"]);
     }
 
     #[test]

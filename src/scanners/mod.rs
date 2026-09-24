@@ -2,8 +2,11 @@ pub mod appdata;
 pub mod caches;
 pub mod derived_data;
 pub mod device_support;
+pub mod docker;
+pub mod downloads;
 pub mod leftovers;
 pub mod node_modules;
+pub mod runtimes;
 pub mod simulators;
 pub mod worktrees;
 

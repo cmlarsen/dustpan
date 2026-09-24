@@ -10,6 +10,33 @@ use std::path::PathBuf;
 pub struct State {
     pub pins: BTreeSet<String>,
     pub ai_notes: BTreeMap<String, AiNote>,
+    pub ai: AiChoice,
+}
+
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct AiChoice {
+    pub provider: Option<String>,
+    pub claude_model: Option<String>,
+    pub codex_model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl AiChoice {
+    pub fn apply(&self, cfg: &mut crate::config::AiConfig) {
+        if let Some(v) = &self.provider {
+            cfg.provider = v.clone();
+        }
+        if let Some(v) = &self.claude_model {
+            cfg.claude_model = v.clone();
+        }
+        if let Some(v) = &self.codex_model {
+            cfg.codex_model = v.clone();
+        }
+        if let Some(v) = &self.effort {
+            cfg.effort = v.clone();
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -24,6 +24,9 @@ const SCANNERS: &[(&str, Scanner)] = &[
     ("worktrees", scanners::worktrees::scan),
     ("derived data", scanners::derived_data::scan),
     ("simulators", scanners::simulators::scan),
+    ("sim runtimes", scanners::runtimes::scan),
+    ("docker", scanners::docker::scan),
+    ("downloads", scanners::downloads::scan),
     ("device support", scanners::device_support::scan),
     ("node_modules", scanners::node_modules::scan),
     ("caches", scanners::caches::scan),
@@ -88,6 +91,7 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
         if !keep_item(&item, min_bytes) {
             return;
         }
+        crate::actions::apply_preflight(&mut item, &ctx.home, &ctx.roots);
         item.protected = protector.is_protected(&item);
         if item.protected {
             item.reasons.insert(0, "protected by you (pin or config)".into());

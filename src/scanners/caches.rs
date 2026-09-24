@@ -1,7 +1,7 @@
 use super::{Ctx, Emit};
 use crate::model::{Action, Category, Item, Verdict};
 use crate::size::dir_stats;
-use crate::util::which;
+use crate::util::{age_days, which};
 
 enum Clean {
     Delete,
@@ -36,8 +36,21 @@ const KNOWN: &[Known] = &[
     Known { name: "Gradle caches", path: ".gradle/caches", verdict: Verdict::Review, clean: Clean::Delete, note: "Android/Gradle dependencies; slow to re-download" },
     Known { name: "Puppeteer browsers", path: ".cache/puppeteer", verdict: Verdict::Review, clean: Clean::Delete, note: "headless Chrome builds; re-downloaded on the next install" },
     Known { name: "Playwright browsers", path: "Library/Caches/ms-playwright", verdict: Verdict::Review, clean: Clean::Delete, note: "browser builds; `npx playwright install` restores them" },
+    Known { name: "Android emulators", path: ".android/avd", verdict: Verdict::Review, clean: Clean::Delete, note: "emulator disks and snapshots; recreate them in Android Studio" },
+    Known { name: "Android system images", path: "Library/Android/sdk/system-images", verdict: Verdict::Review, clean: Clean::Delete, note: "emulator OS images; the SDK Manager downloads them again" },
     Known { name: "Hugging Face models", path: ".cache/huggingface", verdict: Verdict::Review, clean: Clean::Delete, note: "downloaded models; large to fetch again" },
 ];
+
+pub fn recency(verdict: Verdict, action: &Action, idle_days: Option<i64>, stale_days: i64) -> (Verdict, Option<String>) {
+    let deletes = matches!(action, Action::Delete { .. });
+    match idle_days {
+        Some(d) if deletes && verdict == Verdict::Safe && d <= stale_days => (
+            Verdict::Review,
+            Some(format!("in active use ({d}d ago): deleting it only costs re-download time")),
+        ),
+        _ => (verdict, None),
+    }
+}
 
 pub fn scan(ctx: &Ctx, emit: Emit) {
     std::thread::scope(|s| {
@@ -65,8 +78,26 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
                     }
                     Clean::Delete => Action::delete(&path),
                 };
+                let (verdict, note) = recency(item.verdict, &item.action, age_days(item.last_used, ctx.now), ctx.cfg.stale_days);
+                item.verdict = verdict;
+                item.reasons.extend(note);
                 emit(item);
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recently_used_delete_caches_need_review_but_prunes_stay_safe() {
+        let del = Action::delete("/h/.npm/_cacache");
+        let prune = Action::run("pnpm", &["store", "prune"], None);
+        assert_eq!(recency(Verdict::Safe, &del, Some(2), 30).0, Verdict::Review);
+        assert_eq!(recency(Verdict::Safe, &del, Some(60), 30).0, Verdict::Safe);
+        assert_eq!(recency(Verdict::Safe, &prune, Some(0), 30).0, Verdict::Safe);
+        assert_eq!(recency(Verdict::Review, &del, Some(1), 30), (Verdict::Review, None));
+    }
 }

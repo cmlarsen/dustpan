@@ -30,7 +30,7 @@ fn opencode_db(ctx: &Ctx, emit: Emit) {
         format!("last written {idle}d ago"),
         "delete it if you don't need old opencode sessions; opencode recreates an empty one".into(),
     ];
-    item.action = Action::Delete { paths: files };
+    item.action = Action::delete_all(files);
     emit(item);
 }
 
