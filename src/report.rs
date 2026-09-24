@@ -1,12 +1,34 @@
 use crate::model::{Category, Item, Verdict};
 use crate::procs::{fmt_uptime, ProcSnapshot};
-use crate::util::{ago, home, human, tilde};
+use crate::util::{ago, home, human};
 use chrono::Utc;
 use std::collections::BTreeMap;
 
 pub struct DiskInfo {
     pub total: u64,
     pub free: u64,
+}
+
+pub fn safe_inline(text: &str) -> String {
+    safe_text(text, false)
+}
+
+pub fn safe_multiline(text: &str) -> String {
+    safe_text(text, true)
+}
+
+fn safe_text(text: &str, multiline: bool) -> String {
+    text.chars()
+        .map(|c| {
+            if multiline && matches!(c, '\n' | '\t') {
+                c
+            } else if c == '\u{1b}' || c.is_control() {
+                '\u{fffd}'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 pub fn disk_info(path: &std::path::Path) -> Option<DiskInfo> {
@@ -65,9 +87,9 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
                 human(i.reclaimable),
                 ago(i.last_used, now),
                 i.category.label(),
-                i.name
+                safe_inline(&i.name)
             );
-            println!("  {:>7}  {:>4}  {:<14} └ {}", "", "", "", i.reasons.first().cloned().unwrap_or_default());
+            println!("  {:>7}  {:>4}  {:<14} └ {}", "", "", "", safe_inline(i.reasons.first().map(String::as_str).unwrap_or_default()));
         }
         if !verbose && list.len() > 25 {
             println!("  … {} more (dp report --all)", list.len() - 25);
@@ -94,13 +116,12 @@ pub fn print_disk(items: &[Item], secs: f64, verbose: bool) {
                     human(i.bytes),
                     i.effective_verdict().label(),
                     i.category.label(),
-                    i.name,
-                    i.reasons.first().cloned().unwrap_or_default()
+                    safe_inline(&i.name),
+                    safe_inline(i.reasons.first().map(String::as_str).unwrap_or_default())
                 );
             }
         }
     }
-    let _ = tilde(&home, &home);
 }
 
 pub fn print_mem(snap: &ProcSnapshot) {
@@ -117,7 +138,7 @@ pub fn print_mem(snap: &ProcSnapshot) {
     );
     println!("\nTop apps by memory:");
     for (name, bytes, n) in snap.apps.iter().take(12) {
-        println!("  {:>7}  {name}{}", human(*bytes), if *n > 1 { format!(" ({n} processes)") } else { String::new() });
+        println!("  {:>7}  {}{}", human(*bytes), safe_inline(name), if *n > 1 { format!(" ({n} processes)") } else { String::new() });
     }
     let flagged: Vec<_> = snap
         .dev
@@ -132,8 +153,19 @@ pub fn print_mem(snap: &ProcSnapshot) {
             human(p.rss),
             fmt_uptime(p.uptime_secs),
             p.pid,
-            p.name,
-            p.reasons.first().cloned().unwrap_or_default()
+            safe_inline(&p.name),
+            safe_inline(p.reasons.first().map(String::as_str).unwrap_or_default())
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_text_replaces_controls_and_preserves_requested_layout() {
+        assert_eq!(safe_inline("a\x1b[2J\nb\t\u{0085}c"), "a�[2J�b��c");
+        assert_eq!(safe_multiline("a\x1b[2J\nb\t\u{0085}c"), "a�[2J\nb\t�c");
     }
 }
