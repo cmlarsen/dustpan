@@ -33,7 +33,7 @@ pub struct RtFacts {
     pub beta: bool,
     pub newest_for_platform: bool,
     pub release_of_same_version: bool,
-    pub devices: usize,
+    pub devices: Option<usize>,
     pub deletable: bool,
 }
 
@@ -58,9 +58,10 @@ fn version_key(v: &str) -> Vec<u32> {
 
 pub fn classify(f: &RtFacts) -> (Verdict, Vec<String>) {
     let users = match f.devices {
-        0 => "no simulators use it".to_string(),
-        1 => "1 simulator uses it".to_string(),
-        n => format!("{n} simulators use it"),
+        None => "couldn't read the simulator list (`simctl list devices` failed)".to_string(),
+        Some(0) => "no simulators use it".to_string(),
+        Some(1) => "1 simulator uses it".to_string(),
+        Some(n) => format!("{n} simulators use it"),
     };
     if !f.deletable {
         return (Verdict::Keep, vec!["managed by Xcode; simctl won't delete it".into()]);
@@ -74,8 +75,10 @@ pub fn classify(f: &RtFacts) -> (Verdict, Vec<String>) {
     if f.newest_for_platform {
         return (Verdict::Active, vec![format!("newest {} runtime", f.platform), users]);
     }
-    if f.devices == 0 {
-        return (Verdict::Safe, vec![format!("older {} runtime", f.platform), users]);
+    match f.devices {
+        Some(0) => return (Verdict::Safe, vec![format!("older {} runtime", f.platform), users]),
+        None => return (Verdict::Review, vec![format!("older {} runtime", f.platform), users]),
+        Some(_) => {}
     }
     (
         Verdict::Review,
@@ -86,7 +89,7 @@ pub fn classify(f: &RtFacts) -> (Verdict, Vec<String>) {
     )
 }
 
-pub fn facts_for(all: &[Runtime], devices: &HashMap<String, usize>) -> Vec<(Runtime, RtFacts)> {
+pub fn facts_for(all: &[Runtime], devices: Option<&HashMap<String, usize>>) -> Vec<(Runtime, RtFacts)> {
     let mut newest: HashMap<String, (Vec<u32>, bool)> = HashMap::new();
     for r in all {
         let key = (version_key(&r.version), !is_beta(&r.build));
@@ -106,12 +109,13 @@ pub fn facts_for(all: &[Runtime], devices: &HashMap<String, usize>) -> Vec<(Runt
                 release_of_same_version: all.iter().any(|o| {
                     o.platform_identifier == r.platform_identifier && o.version == r.version && !is_beta(&o.build)
                 }),
-                devices: r
-                    .runtime_identifier
-                    .as_ref()
-                    .and_then(|id| devices.get(id))
-                    .copied()
-                    .unwrap_or(0),
+                devices: devices.map(|d| {
+                    r.runtime_identifier
+                        .as_ref()
+                        .and_then(|id| d.get(id))
+                        .copied()
+                        .unwrap_or(0)
+                }),
                 deletable: r.deletable,
             };
             (r.clone(), facts)
@@ -119,15 +123,15 @@ pub fn facts_for(all: &[Runtime], devices: &HashMap<String, usize>) -> Vec<(Runt
         .collect()
 }
 
-fn device_counts() -> HashMap<String, usize> {
+fn device_counts() -> Option<HashMap<String, usize>> {
     #[derive(Deserialize)]
     struct List {
         devices: HashMap<String, Vec<serde_json::Value>>,
     }
     run("xcrun", &["simctl", "list", "devices", "-j"], None, Duration::from_secs(30))
+        .filter(|o| o.ok)
         .and_then(|o| serde_json::from_str::<List>(&o.stdout).ok())
         .map(|l| l.devices.into_iter().map(|(k, v)| (k, v.len())).collect())
-        .unwrap_or_default()
 }
 
 pub fn scan(ctx: &Ctx, emit: Emit) {
@@ -136,7 +140,7 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
     };
     let Ok(map) = serde_json::from_str::<HashMap<String, Runtime>>(&out.stdout) else { return };
     let runtimes: Vec<Runtime> = map.into_values().collect();
-    for (rt, facts) in facts_for(&runtimes, &device_counts()) {
+    for (rt, facts) in facts_for(&runtimes, device_counts().as_ref()) {
         let path = rt
             .path
             .clone()
@@ -195,7 +199,7 @@ mod tests {
             rt("watch", "watchsimulator", "26.5", "23T570", "watch-26-5"),
         ];
         let devices = HashMap::from([("ios-17-5".to_string(), 2), ("ios-26-5".to_string(), 9)]);
-        let f: HashMap<String, RtFacts> = facts_for(&all, &devices)
+        let f: HashMap<String, RtFacts> = facts_for(&all, Some(&devices))
             .into_iter()
             .map(|(r, f)| (r.identifier, f))
             .collect();
@@ -212,12 +216,28 @@ mod tests {
             rt("beta27", "iphonesimulator", "27.0", "24A5260e", "ios-27"),
             rt("rel26", "iphonesimulator", "26.5", "23F77", "ios-26-5"),
         ];
-        let f: HashMap<String, RtFacts> = facts_for(&all, &HashMap::new())
+        let f: HashMap<String, RtFacts> = facts_for(&all, Some(&HashMap::new()))
             .into_iter()
             .map(|(r, f)| (r.identifier, f))
             .collect();
         assert_eq!(classify(&f["beta27"]).0, Verdict::Active);
         assert_eq!(classify(&f["rel26"]).0, Verdict::Safe);
+    }
+
+    #[test]
+    fn unreadable_device_list_makes_older_runtimes_review() {
+        let all = vec![
+            rt("new", "iphonesimulator", "26.5", "23F77", "ios-26-5"),
+            rt("old", "iphonesimulator", "18.4", "22E238", "ios-18-4"),
+        ];
+        let f: HashMap<String, RtFacts> = facts_for(&all, None)
+            .into_iter()
+            .map(|(r, f)| (r.identifier, f))
+            .collect();
+        let (v, r) = classify(&f["old"]);
+        assert_eq!(v, Verdict::Review);
+        assert!(r.iter().any(|x| x.contains("simctl list devices")));
+        assert_eq!(classify(&f["new"]).0, Verdict::Active);
     }
 
     #[test]

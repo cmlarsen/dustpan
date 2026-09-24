@@ -61,10 +61,6 @@ impl Ctx {
         names.dedup();
         Some(names)
     }
-
-    pub fn stale(&self, idle_days: Option<i64>) -> bool {
-        idle_days.is_some_and(|d| d > self.cfg.stale_days)
-    }
 }
 
 pub fn tilde(ctx: &Ctx, p: &Path) -> String {
