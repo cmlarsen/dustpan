@@ -66,10 +66,11 @@ pub fn run_scan(cfg: Config, tx: Sender<ScanMsg>) {
         .into_iter()
         .map(|p| (p.pid, procs::app_name(&p.comm)))
         .collect();
-    let proc_cwds = cwds
-        .into_iter()
-        .map(|(pid, cwd)| (pid, names.get(&pid).cloned().unwrap_or_default(), cwd))
-        .collect();
+    let proc_cwds = cwds.map(|cwds| {
+        cwds.into_iter()
+            .map(|(pid, cwd)| (pid, names.get(&pid).cloned().unwrap_or_default(), cwd))
+            .collect()
+    });
 
     let ctx = Ctx {
         home: home.clone(),

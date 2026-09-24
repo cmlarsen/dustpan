@@ -19,7 +19,7 @@ struct Known {
 const KNOWN: &[Known] = &[
     Known { name: "pnpm store", path: "Library/pnpm/store", verdict: Verdict::Safe, clean: Clean::Command("pnpm", &["store", "prune"]), note: "prune removes packages no project references; frees part of this" },
     Known { name: "uv cache", path: ".cache/uv", verdict: Verdict::Safe, clean: Clean::Command("uv", &["cache", "prune"]), note: "prune removes unused wheels and sources" },
-    Known { name: "Homebrew downloads", path: "Library/Caches/Homebrew", verdict: Verdict::Safe, clean: Clean::Command("brew", &["cleanup", "--prune=all"]), note: "old bottles and downloads" },
+    Known { name: "Homebrew downloads", path: "Library/Caches/Homebrew", verdict: Verdict::Review, clean: Clean::Command("brew", &["cleanup", "--prune=all"]), note: "old bottles and downloads; `brew cleanup --prune=all` also removes old formula versions, which breaks virtualenvs pinned to a Cellar path" },
     Known { name: "CocoaPods cache", path: "Library/Caches/CocoaPods", verdict: Verdict::Safe, clean: Clean::Delete, note: "pods re-download on the next pod install" },
     Known { name: "npm cache", path: ".npm/_cacache", verdict: Verdict::Safe, clean: Clean::Delete, note: "npm re-downloads on demand" },
     Known { name: "bun cache", path: ".bun/install/cache", verdict: Verdict::Safe, clean: Clean::Delete, note: "bun re-downloads on demand" },
@@ -99,5 +99,12 @@ mod tests {
         assert_eq!(recency(Verdict::Safe, &del, Some(60), 30).0, Verdict::Safe);
         assert_eq!(recency(Verdict::Safe, &prune, Some(0), 30).0, Verdict::Safe);
         assert_eq!(recency(Verdict::Review, &del, Some(1), 30), (Verdict::Review, None));
+    }
+
+    #[test]
+    fn brew_cleanup_is_review_because_it_drops_old_formula_versions() {
+        let brew = KNOWN.iter().find(|k| k.path == "Library/Caches/Homebrew").unwrap();
+        assert_eq!(brew.verdict, Verdict::Review);
+        assert!(brew.note.contains("old formula versions"));
     }
 }

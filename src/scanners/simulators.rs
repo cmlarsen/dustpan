@@ -37,7 +37,21 @@ pub const HEAVY_BYTES: u64 = 10 << 30;
 pub fn worktree_suffix(name: &str) -> Option<&str> {
     let start = name.rfind("(wt-")? + 4;
     let end = name[start..].find(')')? + start;
-    Some(&name[start..end])
+    let slug = &name[start..end];
+    Some(slug.split_once("--").map_or(slug, |(s, _)| s))
+}
+
+pub fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+pub fn worktree_is_live(slug: &str, live: &[String]) -> bool {
+    let slug = slugify(slug);
+    live.iter().any(|n| slugify(n) == slug)
 }
 
 pub fn classify(f: &SimFacts, stale_days: i64) -> (Verdict, Vec<String>, SimAction) {
@@ -60,8 +74,11 @@ pub fn classify(f: &SimFacts, stale_days: i64) -> (Verdict, Vec<String>, SimActi
             )
         } else {
             (
-                Verdict::Safe,
-                vec![format!("clone for worktree {wt}, which no longer exists")],
+                Verdict::Review,
+                vec![
+                    format!("clone for worktree {wt}, which isn't among the worktrees found"),
+                    "its repo may live outside the scanned roots".into(),
+                ],
                 SimAction::Delete,
             )
         };
@@ -170,7 +187,7 @@ fn build(ctx: &Ctx, base: &Path, runtime: &str, dev: &SimDev, live: &[String]) -
     let facts = SimFacts {
         available: dev.is_available,
         booted: dev.state == "Booted",
-        worktree_live: worktree.as_ref().is_some_and(|w| live.contains(w)),
+        worktree_live: worktree.as_ref().is_some_and(|w| worktree_is_live(w, live)),
         worktree,
         idle_days: age_days(item.last_used, ctx.now),
         bytes: item.bytes,
@@ -199,6 +216,24 @@ mod tests {
     fn suffix() {
         assert_eq!(worktree_suffix("iPhone 17 Pro (wt-feature-x)"), Some("feature-x"));
         assert_eq!(worktree_suffix("iPhone 17 Pro"), None);
+        assert_eq!(worktree_suffix("iPad Pro 13-inch (M5) (wt-noddy--ipad)"), Some("noddy"));
+    }
+
+    #[test]
+    fn variant_sims_match_their_worktree_by_dir_or_branch_slug() {
+        let live = vec!["noddy".to_string(), "cmlarsen-Fix_Thing".to_string()];
+        let slug = worktree_suffix("iPad Pro 13-inch (M5) (wt-noddy--ipad)").unwrap();
+        assert!(worktree_is_live(slug, &live));
+        assert!(worktree_is_live("cmlarsen-fix-thing", &live));
+        assert!(!worktree_is_live("spirula", &live));
+    }
+
+    #[test]
+    fn unmatched_worktree_sim_is_review_not_safe() {
+        let f = SimFacts { available: true, worktree: Some("elsewhere".into()), ..Default::default() };
+        let (v, r, a) = classify(&f, 30);
+        assert_eq!((v, a), (Verdict::Review, SimAction::Delete));
+        assert!(r.iter().any(|x| x.contains("outside the scanned roots")));
     }
 
     #[test]
@@ -210,7 +245,7 @@ mod tests {
         assert_eq!((v, a), (Verdict::Review, SimAction::Erase));
         let gone = SimFacts { worktree: Some("x".into()), worktree_live: false, ..base.clone() };
         let (v, _, a) = classify(&gone, 30);
-        assert_eq!((v, a), (Verdict::Safe, SimAction::Delete));
+        assert_eq!((v, a), (Verdict::Review, SimAction::Delete));
         let live = SimFacts { worktree: Some("x".into()), worktree_live: true, ..base.clone() };
         assert_eq!(classify(&live, 30).0, Verdict::Keep);
         let booted = SimFacts { booted: true, ..old.clone() };
