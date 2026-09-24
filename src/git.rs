@@ -1,10 +1,26 @@
-use crate::util::run;
+use crate::util::{run, run_with, CmdOut};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(20);
-const SKIP_DIRS: &[&str] = &["node_modules", "Pods", "build", "DerivedData", "target", "dist", "vendor"];
+const GIT_ENV: &[(&str, &str)] = &[("GIT_OPTIONAL_LOCKS", "0")];
+const GIT_CONFIG: &[&str] = &[
+    "--no-optional-locks",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+];
+pub const PROJECT_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "Pods",
+    "build",
+    "DerivedData",
+    "target",
+    "dist",
+    "vendor",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Worktree {
@@ -22,8 +38,13 @@ pub struct Repo {
     pub worktrees: Vec<Worktree>,
 }
 
+fn git_out(dir: &Path, args: &[&str]) -> Option<CmdOut> {
+    let args: Vec<&str> = GIT_CONFIG.iter().copied().chain(args.iter().copied()).collect();
+    run_with("git", &args, Some(dir), GIT_ENV, None, GIT_TIMEOUT)
+}
+
 pub fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = run("git", args, Some(dir), GIT_TIMEOUT)?;
+    let out = git_out(dir, args)?;
     out.ok.then(|| out.stdout.trim_end().to_string())
 }
 
@@ -48,7 +69,7 @@ fn walk_for_repos(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     for e in entries.flatten() {
         let name = e.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
+        if name.starts_with('.') || PROJECT_SKIP_DIRS.contains(&name.as_ref()) {
             continue;
         }
         if e.file_type().is_ok_and(|t| t.is_dir()) {
@@ -141,8 +162,7 @@ pub fn worktree_state(wt: &Path, default_ref: Option<&str>) -> WtGitState {
     let unpushed = git(wt, &["rev-list", "--count", "HEAD", "--not", "--remotes"])
         .and_then(|s| s.trim().parse().ok());
     let merged_ancestor = default_ref.is_some_and(|r| {
-        run("git", &["merge-base", "--is-ancestor", "HEAD", r], Some(wt), GIT_TIMEOUT)
-            .is_some_and(|o| o.ok)
+        git_out(wt, &["merge-base", "--is-ancestor", "HEAD", r]).is_some_and(|o| o.ok)
     });
     WtGitState {
         dirty,
@@ -152,7 +172,7 @@ pub fn worktree_state(wt: &Path, default_ref: Option<&str>) -> WtGitState {
 }
 
 pub fn head_contained_in(wt: &Path, oid: &str) -> bool {
-    run("git", &["merge-base", "--is-ancestor", "HEAD", oid], Some(wt), GIT_TIMEOUT).is_some_and(|o| o.ok)
+    git_out(wt, &["merge-base", "--is-ancestor", "HEAD", oid]).is_some_and(|o| o.ok)
 }
 
 pub fn gitdir_of(wt: &Path) -> Option<PathBuf> {
@@ -348,6 +368,47 @@ mod tests {
         let head = git(r, &["rev-parse", "HEAD"]).unwrap();
         assert!(head_contained_in(r, &head));
         assert!(!head_contained_in(r, "0123456789abcdef0123456789abcdef01234567"));
+    }
+
+    #[test]
+    fn git_inspection_disables_repo_fsmonitor_and_hooks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let marker = dir.path().join("repo-code-ran");
+        std::fs::create_dir(&repo).unwrap();
+        let raw = |args: &[&str]| {
+            let out = run("git", args, Some(&repo), GIT_TIMEOUT).unwrap();
+            assert!(out.ok, "git {args:?}: {}", out.stderr);
+        };
+        raw(&["init", "-q", "-b", "main"]);
+        raw(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "one",
+        ]);
+        let fsmonitor = dir.path().join("fsmonitor.sh");
+        let hook = repo.join(".git/hooks/post-index-change");
+        let script = format!("#!/bin/sh\ntouch '{}'\n", marker.display());
+        std::fs::write(&fsmonitor, &script).unwrap();
+        std::fs::write(&hook, &script).unwrap();
+        std::fs::set_permissions(&fsmonitor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        raw(&["config", "core.fsmonitor", fsmonitor.to_str().unwrap()]);
+
+        let state = worktree_state(&repo, Some("main"));
+        assert_eq!(state.dirty, Some(0));
+        assert!(!marker.exists());
+
+        raw(&["status", "--porcelain"]);
+        assert!(marker.exists());
     }
 
     #[test]

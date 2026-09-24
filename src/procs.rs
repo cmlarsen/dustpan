@@ -216,17 +216,10 @@ pub fn app_name(comm: &str) -> String {
         .unwrap_or_else(|| comm.to_string())
 }
 
-fn outermost_app(comm: &str) -> Option<String> {
-    let idx = comm.find(".app/")?;
-    let before = &comm[..idx];
-    let start = before.rfind('/').map(|i| i + 1).unwrap_or(0);
-    Some(format!("{}.app", &before[start..]))
-}
-
 pub fn group_by_app(procs: &[Proc]) -> Vec<(String, u64, usize)> {
     let mut map: HashMap<String, (u64, usize)> = HashMap::new();
     for p in procs {
-        let key = outermost_app(&p.comm).unwrap_or_else(|| app_name(&p.comm));
+        let key = app_name(&p.comm);
         let e = map.entry(key).or_default();
         e.0 += p.rss_kb * 1024;
         e.1 += 1;
@@ -462,8 +455,8 @@ mod tests {
     #[test]
     fn groups_helpers_under_outer_app() {
         assert_eq!(
-            outermost_app("/Applications/Orca.app/Contents/Frameworks/Orca Helper.app/Contents/MacOS/Orca Helper").as_deref(),
-            Some("Orca.app")
+            app_name("/Applications/Orca.app/Contents/Frameworks/Orca Helper.app/Contents/MacOS/Orca Helper"),
+            "Orca.app"
         );
         assert_eq!(app_name("/Users/me/.local/bin/claude"), "claude");
     }

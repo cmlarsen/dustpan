@@ -150,15 +150,13 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
             let base = &base;
             let live = &live;
             s.spawn(move || {
-                if let Some(item) = build(ctx, base, runtime, dev, live) {
-                    emit(item);
-                }
+                emit(build(ctx, base, runtime, dev, live));
             });
         }
     });
 }
 
-fn build(ctx: &Ctx, base: &Path, runtime: &str, dev: &SimDev, live: &[String]) -> Option<Item> {
+fn build(ctx: &Ctx, base: &Path, runtime: &str, dev: &SimDev, live: &[String]) -> Item {
     let dir: PathBuf = base.join(&dev.udid);
     let apps_dir = dir.join("data/Containers/Data/Application");
     let stats = dir_stats_opts(
@@ -175,13 +173,12 @@ fn build(ctx: &Ctx, base: &Path, runtime: &str, dev: &SimDev, live: &[String]) -
         .replace("iOS-", "iOS ")
         .replace("watchOS-", "watchOS ")
         .replace('-', ".");
-    let mut item = Item::new(
+    let mut item = Item::sized(
         Category::Simulator,
         format!("{} · {}", dev.name, runtime_label),
         &dir,
+        &stats,
     );
-    item.bytes = stats.bytes;
-    item.reclaimable = stats.exclusive;
     item.last_used = last_used(&dir);
     let worktree = worktree_suffix(&dev.name).map(String::from);
     let facts = SimFacts {
@@ -205,7 +202,7 @@ fn build(ctx: &Ctx, base: &Path, runtime: &str, dev: &SimDev, live: &[String]) -
         SimAction::Erase => Action::run("xcrun", &["simctl", "erase", &dev.udid], None),
         SimAction::Delete => Action::run("xcrun", &["simctl", "delete", &dev.udid], None),
     };
-    Some(item)
+    item
 }
 
 #[cfg(test)]

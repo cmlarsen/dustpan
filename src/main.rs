@@ -1,9 +1,12 @@
+#[cfg(not(target_os = "macos"))]
+compile_error!("dustpan only supports macOS");
+
 mod actions;
 mod ai;
+mod catalog;
 mod config;
 mod git;
 mod model;
-mod models;
 mod procs;
 mod report;
 mod scan;

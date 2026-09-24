@@ -82,10 +82,7 @@ fn build(ctx: &Ctx, dir: &Path) -> Item {
         .unwrap_or_default();
     let stats = dir_stats(dir);
     if SHARED_CACHES.contains(&dirname.as_str()) {
-        let mut item = Item::new(Category::DerivedData, format!("Xcode {dirname}"), dir);
-        item.bytes = stats.bytes;
-        item.reclaimable = stats.exclusive;
-        item.last_used = stats.newest;
+        let mut item = Item::sized(Category::DerivedData, format!("Xcode {dirname}"), dir, &stats);
         item.verdict = Verdict::Review;
         item.reasons = vec![
             "shared Clang/Swift module cache used by every Xcode project".into(),
@@ -100,13 +97,12 @@ fn build(ctx: &Ctx, dir: &Path) -> Item {
         .as_ref()
         .map(|w| tilde(ctx, w))
         .unwrap_or_else(|| "?".into());
-    let mut item = Item::new(
+    let mut item = Item::sized(
         Category::DerivedData,
         format!("{project} · {display_ws}"),
         dir,
+        &stats,
     );
-    item.bytes = stats.bytes;
-    item.reclaimable = stats.exclusive;
     item.last_used = accessed.or(stats.newest);
     item.owner = ws.clone();
     let exists = ws.as_ref().is_some_and(|w| w.exists());

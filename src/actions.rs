@@ -161,6 +161,27 @@ fn remove(p: &Path) -> Result<()> {
     }
 }
 
+fn check_missing_worktree(program: &str, args: &[String]) -> Result<()> {
+    let [subcommand, command, path] = args else {
+        return Ok(());
+    };
+    if program != "git" || subcommand != "worktree" || command != "remove" {
+        return Ok(());
+    }
+    match Path::new(path).try_exists() {
+        Ok(false) => Ok(()),
+        Ok(true) => bail!(
+            "refusing to remove worktree {} because its checkout folder now exists; rescan first",
+            path
+        ),
+        Err(e) => bail!(
+            "refusing to remove worktree {} because its checkout folder could not be checked: {}",
+            path,
+            e
+        ),
+    }
+}
+
 pub fn execute(action: &Action, home: &Path, roots: &[PathBuf], protector: &Protector) -> Result<String> {
     check_not_root(euid())?;
     protector.check_action(action)?;
@@ -176,6 +197,7 @@ pub fn execute(action: &Action, home: &Path, roots: &[PathBuf], protector: &Prot
             Ok(format!("deleted {} path(s)", paths.len()))
         }
         Action::Run { program, args, cwd } => {
+            check_missing_worktree(program, args)?;
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let out = crate::util::run(program, &args, cwd.as_deref(), Duration::from_secs(1800))
                 .with_context(|| format!("could not run {program} (missing or timed out)"))?;
@@ -466,6 +488,24 @@ mod tests {
         assert!(clean(&item, home, &[], &protector).is_err());
         assert!(legacy_nm.exists());
         assert!(web_nm.exists(), "nothing is deleted when any path is protected");
+    }
+
+    #[test]
+    fn worktree_remove_requires_checkout_to_remain_missing() {
+        let d = tempfile::tempdir().unwrap();
+        let checkout = d.path().join("Work/reappeared");
+        let action = Action::run(
+            "git",
+            &["worktree", "remove", checkout.to_str().unwrap()],
+            Some(d.path().to_path_buf()),
+        );
+        let Action::Run { program, args, .. } = &action else { panic!() };
+        assert!(check_missing_worktree(program, args).is_ok());
+        std::fs::create_dir_all(&checkout).unwrap();
+        let error = check_missing_worktree(program, args).unwrap_err().to_string();
+        assert!(error.contains("checkout folder now exists"), "{error}");
+        assert!(execute(&action, d.path(), &[], &unprotected()).is_err());
+        assert!(checkout.exists());
     }
 
     #[test]

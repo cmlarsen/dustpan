@@ -190,8 +190,7 @@ fn build(ctx: &Ctx, repo: &Repo, wt: &Worktree, prs: &Prs) -> Item {
                 mtime_ignore: MTIME_IGNORE,
             },
         );
-        item.bytes = stats.bytes;
-        item.reclaimable = stats.exclusive;
+        item.set_stats(&stats);
         item.last_used = newer(reflog, stats.newest);
         let gs = git::worktree_state(&wt.path, repo.default_ref.as_deref());
         facts.dirty = gs.dirty;

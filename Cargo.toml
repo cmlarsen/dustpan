@@ -8,9 +8,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/cmlarsen/dustpan"
 homepage = "https://github.com/cmlarsen/dustpan"
 readme = "README.md"
+include = ["src/**", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "Cargo.toml", "Cargo.lock"]
 keywords = ["cleanup", "disk-space", "xcode", "git-worktree", "tui"]
 categories = ["command-line-utilities", "development-tools", "filesystem"]
-exclude = [".github/"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -30,6 +30,11 @@ toml = "1.1.6"
 [[bin]]
 name = "dp"
 path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
 
 # The profile that 'dist' will build with
 [profile.dist]

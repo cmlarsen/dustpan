@@ -38,14 +38,12 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
             let newest = list[0].2.clone();
             for (i, (_, path, name)) in list.into_iter().enumerate() {
                 let stats = dir_stats(&path);
-                let mut item = Item::new(
+                let mut item = Item::sized(
                     Category::DeviceSupport,
                     format!("{} {name}", platform.replace(" DeviceSupport", "")),
                     &path,
+                    &stats,
                 );
-                item.bytes = stats.bytes;
-                item.reclaimable = stats.exclusive;
-                item.last_used = stats.newest;
                 item.action = Action::delete(&path);
                 let device = if model.is_empty() { "this platform".to_string() } else { model.clone() };
                 if i == 0 {

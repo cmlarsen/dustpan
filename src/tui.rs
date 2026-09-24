@@ -2,7 +2,7 @@ use crate::actions;
 use crate::ai;
 use crate::config::{resolve_roots, Config, Protector};
 use crate::model::{Category, Item, Verdict};
-use crate::models::Catalog;
+use crate::catalog::Catalog;
 use crate::procs::{self, fmt_uptime, ProcItem, ProcSnapshot};
 use crate::report::{disk_info, totals, DiskInfo};
 use crate::scan::{self, ScanMsg};
@@ -779,7 +779,7 @@ impl App {
             self.catalog_loading = true;
             let tx = self.tx.clone();
             std::thread::spawn(move || {
-                let _ = tx.send(Msg::Catalog(Box::new(crate::models::fetch())));
+                let _ = tx.send(Msg::Catalog(Box::new(crate::catalog::fetch())));
             });
         }
     }
@@ -1775,7 +1775,7 @@ mod tests {
     }
 
     fn catalog() -> Catalog {
-        use crate::models::ModelOption;
+        use crate::catalog::ModelOption;
         let m = |id: &str, efforts: &[&str], default: &str| ModelOption {
             id: id.into(),
             about: format!("{id} about"),

@@ -61,10 +61,7 @@ pub fn scan(ctx: &Ctx, emit: Emit) {
                     return;
                 }
                 let stats = dir_stats(&path);
-                let mut item = Item::new(Category::PackageCache, k.name, &path);
-                item.bytes = stats.bytes;
-                item.reclaimable = stats.exclusive;
-                item.last_used = stats.newest;
+                let mut item = Item::sized(Category::PackageCache, k.name, &path, &stats);
                 item.verdict = k.verdict;
                 item.reasons = vec![k.note.to_string()];
                 item.action = match &k.clean {

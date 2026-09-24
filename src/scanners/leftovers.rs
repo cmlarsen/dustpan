@@ -28,10 +28,7 @@ fn codex_staging(ctx: &Ctx, emit: Emit) {
     }
     let stats = dir_stats(&dir);
     let oldest = stale.iter().filter_map(|p| mtime(p)).min();
-    let mut item = Item::new(Category::Leftover, "Codex marketplace upgrade staging", &dir);
-    item.bytes = stats.bytes;
-    item.reclaimable = stats.exclusive;
-    item.last_used = stats.newest;
+    let mut item = Item::sized(Category::Leftover, "Codex marketplace upgrade staging", &dir, &stats);
     item.verdict = Verdict::Safe;
     item.reasons = vec![
         format!(

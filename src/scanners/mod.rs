@@ -54,7 +54,9 @@ impl Ctx {
             .proc_cwds
             .as_ref()?
             .iter()
-            .filter(|(pid, name, cwd)| *pid != me && name != "lsof" && cwd.starts_with(dir))
+            .filter(|(pid, name, cwd)| {
+                *pid != me && !name.is_empty() && name != "lsof" && cwd.starts_with(dir)
+            })
             .map(|(_, name, _)| name.clone())
             .collect();
         names.sort();
@@ -94,6 +96,18 @@ pub mod tests {
         let c = ctx(vec![], Some(vec![(1, "node".into(), PathBuf::from("/w/app"))]));
         assert_eq!(c.processes_in(Path::new("/w")), Some(vec!["node".to_string()]));
         assert_eq!(c.processes_in(Path::new("/x")), Some(vec![]));
+    }
+
+    #[test]
+    fn processes_in_drops_pids_without_process_names() {
+        let c = ctx(
+            vec![],
+            Some(vec![
+                (1, "".into(), PathBuf::from("/w/missing-from-ps")),
+                (2, "caffeinate".into(), PathBuf::from("/w/app")),
+            ]),
+        );
+        assert_eq!(c.processes_in(Path::new("/w")), Some(vec!["caffeinate".into()]));
     }
 
     #[test]

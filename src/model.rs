@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
+use crate::size::DirStats;
+
 pub const PROTECTED_REASON: &str = "protected by you (pin or config)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -222,6 +224,23 @@ impl Item {
         }
     }
 
+    pub fn sized(
+        category: Category,
+        name: impl Into<String>,
+        path: impl Into<PathBuf>,
+        stats: &DirStats,
+    ) -> Self {
+        let mut item = Self::new(category, name, path);
+        item.set_stats(stats);
+        item
+    }
+
+    pub fn set_stats(&mut self, stats: &DirStats) {
+        self.bytes = stats.bytes;
+        self.reclaimable = stats.exclusive;
+        self.last_used = stats.newest;
+    }
+
     pub fn effective_verdict(&self) -> Verdict {
         if self.protected {
             Verdict::Keep
@@ -294,6 +313,21 @@ mod tests {
         item.set_protected(false);
         assert!(!item.protected);
         assert_eq!(item.reasons, vec!["project gone".to_string()]);
+    }
+
+    #[test]
+    fn sized_item_uses_directory_stats() {
+        let newest = Utc::now();
+        let stats = DirStats {
+            bytes: 120,
+            exclusive: 80,
+            newest: Some(newest),
+            ..Default::default()
+        };
+        let item = Item::sized(Category::DerivedData, "x", "/tmp/x", &stats);
+        assert_eq!(item.bytes, 120);
+        assert_eq!(item.reclaimable, 80);
+        assert_eq!(item.last_used, Some(newest));
     }
 
     #[test]

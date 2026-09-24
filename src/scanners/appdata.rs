@@ -40,10 +40,7 @@ fn claude_vm(ctx: &Ctx, emit: Emit) {
         return;
     }
     let s = dir_stats(&dir);
-    let mut item = Item::new(Category::AppData, "Claude desktop sandbox VM image", &dir);
-    item.bytes = s.bytes;
-    item.reclaimable = s.exclusive;
-    item.last_used = s.newest;
+    let mut item = Item::sized(Category::AppData, "Claude desktop sandbox VM image", &dir, &s);
     item.verdict = Verdict::Review;
     item.reasons = vec![
         "VM image the Claude desktop app uses to run code in a sandbox".into(),
@@ -62,10 +59,12 @@ fn container_models(ctx: &Ctx, emit: Emit) {
         }
         let bundle = e.file_name().to_string_lossy().into_owned();
         let s = dir_stats(&hf);
-        let mut item = Item::new(Category::AppData, format!("{bundle} Hugging Face models"), &hf);
-        item.bytes = s.bytes;
-        item.reclaimable = s.exclusive;
-        item.last_used = s.newest;
+        let mut item = Item::sized(
+            Category::AppData,
+            format!("{bundle} Hugging Face models"),
+            &hf,
+            &s,
+        );
         item.verdict = Verdict::Review;
         item.reasons = vec![
             format!("ML models downloaded by {bundle}"),
