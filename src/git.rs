@@ -186,11 +186,18 @@ pub struct Prs {
 }
 
 impl Prs {
-    pub fn for_branch(&self, branch: &str, default_branch: Option<&str>) -> &[PrInfo] {
-        if default_branch == Some(branch) || self.bases.contains(branch) {
-            return &[];
+    pub fn for_branch(&self, branch: &str, default_branch: Option<&str>) -> Vec<PrInfo> {
+        if default_branch == Some(branch) {
+            return Vec::new();
         }
-        self.by_head.get(branch).map(Vec::as_slice).unwrap_or(&[])
+        let base = self.bases.contains(branch);
+        self.by_head
+            .get(branch)
+            .into_iter()
+            .flatten()
+            .filter(|p| !base || p.state == PrState::Open)
+            .cloned()
+            .collect()
     }
 }
 
@@ -299,6 +306,8 @@ mod tests {
         assert!(p.for_branch("beta", Some("master")).is_empty());
         assert!(p.for_branch("main", Some("main")).is_empty());
         assert_eq!(p.for_branch("feat", Some("master")).len(), 1);
+        let epic = r#"[{"number":1095,"headRefName":"epic","headRefOid":"e","state":"OPEN","isCrossRepository":false,"baseRefName":"main"},{"number":1000,"headRefName":"epic","headRefOid":"e0","state":"MERGED","isCrossRepository":false,"baseRefName":"main"},{"number":1097,"headRefName":"part","headRefOid":"p","state":"MERGED","isCrossRepository":false,"baseRefName":"epic"}]"#;
+        assert_eq!(parse_pr_json(epic).for_branch("epic", Some("main")), vec![pr(1095, PrState::Open, "e")]);
         assert_eq!(branch_of_ref("origin/beta"), "beta");
     }
 

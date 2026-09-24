@@ -171,7 +171,7 @@ fn build(ctx: &Ctx, repo: &Repo, wt: &Worktree, prs: &Prs) -> Item {
         .branch
         .as_deref()
         .map(|b| prs.for_branch(b, default_branch))
-        .unwrap_or(&[]);
+        .unwrap_or_default();
     let mut facts = WtFacts {
         presence: presence.clone(),
         on_volume: wt.path.starts_with("/Volumes"),
@@ -199,7 +199,7 @@ fn build(ctx: &Ctx, repo: &Repo, wt: &Worktree, prs: &Prs) -> Item {
         facts.merged_ancestor = gs.merged_ancestor;
         facts.idle_days = age_days(item.last_used, ctx.now);
         facts.running = ctx.processes_in(&wt.path);
-        facts.pr = git::pick_pr(candidates, &wt.head, |oid| git::head_contained_in(&wt.path, oid));
+        facts.pr = git::pick_pr(&candidates, &wt.head, |oid| git::head_contained_in(&wt.path, oid));
     }
     let (verdict, mut reasons) = classify(&facts, ctx.cfg.stale_days);
     item.verdict = verdict;
