@@ -1,3 +1,4 @@
+use crate::config::Provider;
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,7 @@ pub struct State {
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct AiChoice {
-    pub provider: Option<String>,
+    pub provider: Option<Provider>,
     pub claude_model: Option<String>,
     pub codex_model: Option<String>,
     pub effort: Option<String>,
@@ -30,8 +31,8 @@ pub struct AiChoice {
 
 impl AiChoice {
     pub fn apply(&self, cfg: &mut crate::config::AiConfig) {
-        if let Some(v) = &self.provider {
-            cfg.provider = v.clone();
+        if let Some(v) = self.provider {
+            cfg.provider = v;
         }
         if let Some(v) = &self.claude_model {
             cfg.claude_model = v.clone();
@@ -198,6 +199,18 @@ pub fn read_history(limit: usize) -> Vec<HistoryEntry> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn ai_choice_parses_legacy_provider_strings() {
+        let claude: State = serde_json::from_str(r#"{"ai":{"provider":"claude"}}"#).unwrap();
+        assert_eq!(claude.ai.provider, Some(Provider::Claude));
+        let codex: State = serde_json::from_str(r#"{"ai":{"provider":"codex"}}"#).unwrap();
+        assert_eq!(codex.ai.provider, Some(Provider::Codex));
+        let mut cfg = crate::config::AiConfig::default();
+        codex.ai.apply(&mut cfg);
+        assert_eq!(cfg.provider, Provider::Codex);
+        assert!(serde_json::from_str::<State>(r#"{"ai":{"provider":"other"}}"#).is_err());
+    }
 
     #[test]
     fn corrupt_state_is_moved_aside_and_not_overwritten() {

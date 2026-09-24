@@ -1,3 +1,4 @@
+use crate::config::Provider;
 use crate::util::{run, run_with};
 use serde::Deserialize;
 use std::time::Duration;
@@ -33,15 +34,15 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    pub fn models(&self, provider: &str) -> &[ModelOption] {
-        if provider == "codex" {
+    pub fn models(&self, provider: Provider) -> &[ModelOption] {
+        if provider == Provider::Codex {
             &self.codex
         } else {
             &self.claude
         }
     }
 
-    pub fn efforts_for(&self, provider: &str, model: &str) -> Vec<String> {
+    pub fn efforts_for(&self, provider: Provider, model: &str) -> Vec<String> {
         let from_model = self
             .models(provider)
             .iter()
@@ -51,13 +52,13 @@ impl Catalog {
         if !from_model.is_empty() {
             return from_model;
         }
-        if provider != "codex" && !self.claude_efforts.is_empty() {
+        if provider == Provider::Claude && !self.claude_efforts.is_empty() {
             return self.claude_efforts.clone();
         }
         FALLBACK_EFFORTS.iter().map(|s| s.to_string()).collect()
     }
 
-    pub fn default_effort(&self, provider: &str, model: &str) -> Option<String> {
+    pub fn default_effort(&self, provider: Provider, model: &str) -> Option<String> {
         self.models(provider)
             .iter()
             .find(|m| m.id == model)
@@ -306,11 +307,18 @@ mod tests {
             claude_efforts: vec!["low".into(), "max".into()],
             notes: vec![],
         };
-        assert_eq!(cat.efforts_for("codex", "gpt-5.5"), ["low", "xhigh"]);
-        assert_eq!(cat.efforts_for("claude", "opus"), ["low", "max"]);
-        assert_eq!(cat.efforts_for("codex", "unknown"), FALLBACK_EFFORTS);
         assert_eq!(
-            cat.default_effort("codex", "gpt-6-astra").as_deref(),
+            cat.efforts_for(Provider::Codex, "gpt-5.5"),
+            ["low", "xhigh"]
+        );
+        assert_eq!(cat.efforts_for(Provider::Claude, "opus"), ["low", "max"]);
+        assert_eq!(
+            cat.efforts_for(Provider::Codex, "unknown"),
+            FALLBACK_EFFORTS
+        );
+        assert_eq!(
+            cat.default_effort(Provider::Codex, "gpt-6-astra")
+                .as_deref(),
             Some("low")
         );
     }

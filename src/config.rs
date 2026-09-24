@@ -19,10 +19,33 @@ pub struct Config {
     pub ai: AiConfig,
 }
 
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Provider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provider::Claude => "claude",
+            Provider::Codex => "codex",
+        }
+    }
+}
+
+impl std::fmt::Display for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default, deny_unknown_fields)]
 pub struct AiConfig {
-    pub provider: String,
+    pub provider: Provider,
     pub claude_model: String,
     pub codex_model: String,
     pub effort: String,
@@ -45,7 +68,7 @@ impl Default for Config {
 impl Default for AiConfig {
     fn default() -> Self {
         AiConfig {
-            provider: "claude".into(),
+            provider: Provider::Claude,
             claude_model: "claude-opus-5".into(),
             codex_model: "gpt-5.6-sol".into(),
             effort: "medium".into(),
@@ -453,11 +476,21 @@ mod tests {
     }
 
     #[test]
+    fn provider_parses_legacy_lowercase_strings() {
+        let claude: Config = toml::from_str("[ai]\nprovider = \"claude\"\n").unwrap();
+        assert_eq!(claude.ai.provider, Provider::Claude);
+        let codex: Config = toml::from_str("[ai]\nprovider = \"codex\"\n").unwrap();
+        assert_eq!(codex.ai.provider, Provider::Codex);
+        assert!(toml::from_str::<Config>("[ai]\nprovider = \"Claude\"\n").is_err());
+        assert!(toml::from_str::<Config>("[ai]\nprovider = \"other\"\n").is_err());
+    }
+
+    #[test]
     fn partial_config_uses_defaults() {
         let cfg: Config = toml::from_str("stale_days = 7\n[ai]\nprovider = \"codex\"\n").unwrap();
         assert_eq!(cfg.stale_days, 7);
         assert_eq!(cfg.min_size_mb, 100);
-        assert_eq!(cfg.ai.provider, "codex");
+        assert_eq!(cfg.ai.provider, Provider::Codex);
         assert_eq!(cfg.ai.claude_model, "claude-opus-5");
         assert_eq!(cfg.ai.codex_model, "gpt-5.6-sol");
         assert_eq!(cfg.ai.effort, "medium");

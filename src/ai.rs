@@ -1,4 +1,4 @@
-use crate::config::AiConfig;
+use crate::config::{AiConfig, Provider};
 use crate::model::Item;
 use crate::procs::{ProcItem, fmt_uptime};
 use crate::util::{human, run_with, tilde};
@@ -172,8 +172,8 @@ fn codex_out_file() -> Result<NamedTempFile> {
 pub fn ask(cfg: &AiConfig, prompt: &str, dir: &Path) -> Result<String> {
     let timeout = Duration::from_secs(cfg.timeout_secs);
     let dir_s = dir.display().to_string();
-    match cfg.provider.as_str() {
-        "codex" => {
+    match cfg.provider {
+        Provider::Codex => {
             let out_file = codex_out_file()?;
             let args = codex_args(cfg, prompt, &dir_s, &out_file.path().display().to_string());
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -185,7 +185,7 @@ pub fn ask(cfg: &AiConfig, prompt: &str, dir: &Path) -> Result<String> {
             }
             Ok(text.trim().to_string())
         }
-        _ => {
+        Provider::Claude => {
             let args = claude_args(cfg, prompt, &dir_s);
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
             let out = run_with("claude", &args, Some(dir), LOCKDOWN_ENV, None, timeout)

@@ -84,7 +84,7 @@ enum Cmd {
         path: PathBuf,
         /// claude or codex (defaults to the TUI's last choice, then the config)
         #[arg(long)]
-        provider: Option<String>,
+        provider: Option<config::Provider>,
         /// Model ID for that provider
         #[arg(long)]
         model: Option<String>,
@@ -164,7 +164,7 @@ fn main() -> Result<()> {
                 ai_cfg.provider = p;
             }
             if let Some(m) = model {
-                if ai_cfg.provider == "codex" {
+                if ai_cfg.provider == config::Provider::Codex {
                     ai_cfg.codex_model = m;
                 } else {
                     ai_cfg.claude_model = m;
@@ -181,7 +181,7 @@ fn main() -> Result<()> {
             item.reasons = vec!["asked about directly with `dp ask`".into()];
             eprintln!(
                 "asking {} about {} ({})…",
-                report::safe_inline(&ai_cfg.provider),
+                report::safe_inline(ai_cfg.provider.as_str()),
                 report::safe_inline(&util::tilde(&path, &home)),
                 util::human(item.bytes)
             );
